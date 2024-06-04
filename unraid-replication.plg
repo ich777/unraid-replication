@@ -21,6 +21,7 @@
 ###2024.06.04a
 - Minor bugfixes for keepalived scripts to prevent warning messages in syslog
 - Bugfix to replication logic when no containers are specified for a service 
+- Fix bug in plugin update routine
 
 ###2024.06.04
 - Initial (experimental) release
@@ -94,7 +95,9 @@ KEEPALIVED=disabled" &gt; &plugin;/settings.cfg
 fi
 
 # Link host_sync for system wide access to command: unraid-replication
-ln -s &emhttp;/scripts/host_sync /usr/bin/unraid-replication
+if [ ! -L /usr/bin/unraid-replication ]; then
+  ln -s &emhttp;/scripts/host_sync /usr/bin/unraid-replication
+fi
 
 # Copy default keepalived config and scripts if not found
 if [ ! -f &plugin;/keepalived/keepalived.conf ]; then
@@ -113,7 +116,9 @@ fi
 # Get all keepalived configuration files and linke them to /etc/keepalived/
 KEEPALIVED_FILES="$(ls -1 &plugin;/keepalived/)"
 for keepalived_files in ${KEEPALIVED_FILES}; do
-  ln -s &plugin;/keepalived/${keepalived_files%/*} /etc/keepalived/${keepalived_files%/*}
+  if [ ! -L /etc/keepalived/${keepalived_files%/*} ]; then
+    ln -s &plugin;/keepalived/${keepalived_files%/*} /etc/keepalived/${keepalived_files%/*}
+  fi
 done
 
 </INLINE>
