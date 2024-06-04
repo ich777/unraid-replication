@@ -123,10 +123,12 @@ echo "---Uninstalling Unraid Replication---"
 echo "-------------------------------------"
 kill $(pidof keepalived) 2&gt;/dev/null
 rm -rf /etc/keepalived
+echo "Removing plugin related files
 removepkg &name;-&version; &gt;/dev/null 2&gt;&amp;1
-removepkg keepalived-&keepalived_v;-x86_64-1 &gt;/dev/null 2&gt;&amp;1
 rm -rf &emhttp;
 rm -rf &plugin;
+echo "Removing keepalived"
+removepkg keepalived-&keepalived_v;-x86_64-1 &gt;/dev/null 2&gt;&amp;1
 echo
 echo "--------------------------------------------"
 echo "---Unraid Replication plugin uninstalled!---"
