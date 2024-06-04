@@ -7,7 +7,7 @@
   <!ENTITY keepalived_v    "2.3.1">
   <!ENTITY keepalived_md5  "58880213ff2ff9021660a6a3022c66d2">
   <!ENTITY launch          "Settings/unraid-replication">
-  <!ENTITY gitURL          "https://github.com/&author;/unraid-&name;/raw/master">
+  <!ENTITY gitURL          "https://github.com/&author;/&name;/raw/master">
   <!ENTITY pluginURL       "&gitURL;/&name;.plg">
   <!ENTITY plugin          "/boot/config/plugins/&name;">
   <!ENTITY emhttp          "/usr/local/emhttp/plugins/&name;">
