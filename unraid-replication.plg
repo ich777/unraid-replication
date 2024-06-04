@@ -61,6 +61,21 @@ ATTENTION: This is a experimental release and it is recommended to use this tool
 <FILE Run="/bin/bash">
 <INLINE>
 
+# Create replication_cfg directory
+if [ ! -d &plugin;/replication_cfg ]; then
+  mkdir -p &plugin;/replication_cfg
+fi
+
+# Create certificate directory
+if [ ! -d &plugin;/cert ]; then
+  mkdir -p &plugin;/cert
+fi
+
+# Create necessary persistent directories for keepalived
+if [ ! -d &plugin;/keepalived/scripts ]; then
+  mkdir -p &plugin;/keepalived/scripts
+fi
+
 # Create settings.cfg file
 if [ ! -f &plugin;/settings.cfg ]; then
   echo "INSTANCE_TYPE=
@@ -74,23 +89,8 @@ SYSLOG_LOGGING=1
 KEEPALIVED=disabled" &gt; &plugin;/settings.cfg
 fi
 
-# Create replication_cfg directory
-if [ ! -d &plugin;/replication_cfg ]; then
-  mkdir -p &plugin;/replication_cfg
-fi
-
 # Link host_sync for system wide access to command: unraid-replication
 ln -s &emhttp;/scripts/host_sync /usr/bin/unraid-replication
-
-# Create certificate directory
-if [ ! -d &plugin;/cert ]; then
-  mkdir -p &plugin;/cert
-fi
-
-# Create necessary persistent directories for keepalived
-if [ ! -d &plugin;/keepalived/scripts ]; then
-  mkdir -p &plugin;/keepalived/scripts
-fi
 
 # Copy default keepalived config and scripts if not found
 if [ ! -f &plugin;/keepalived/keepalived.conf ]; then
@@ -122,6 +122,7 @@ echo "-------------------------------------"
 echo "---Uninstalling Unraid Replication---"
 echo "-------------------------------------"
 kill $(pidof keepalived) 2&gt;/dev/null
+rm -rf /etc/keepalived
 removepkg &name;-&version; &gt;/dev/null 2&gt;&amp;1
 removepkg keepalived-&keepalived_v;-x86_64-1 &gt;/dev/null 2&gt;&amp;1
 rm -rf &emhttp;
