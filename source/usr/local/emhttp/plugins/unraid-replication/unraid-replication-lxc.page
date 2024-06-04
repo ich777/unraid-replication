@@ -1,0 +1,107 @@
+Menu="unraid-replication:4"
+Title="LXC"
+Tag="cubes f32"
+Cond="parse_ini_file('/boot/config/plugins/unraid-replication/settings.cfg')['INSTANCE_TYPE'] == 'host' && parse_ini_file('/boot/config/plugins/unraid-replication/settings.cfg')['LXC_REPLICATION'] == 'enabled'"
+---
+<script>
+if ( window.history.replaceState ) {
+  window.history.replaceState( null, null, window.location.href );
+}
+</script>
+
+<?php
+// Get variables
+$lxc_path = parse_ini_file('/boot/config/plugins/lxc/lxc.conf')['lxc.lxcpath'];
+$lxc_containers = shell_exec("lxc-ls --line");
+$replication_containers = array();
+$replication = json_decode(file_get_contents('/boot/config/plugins/unraid-replication/replication_cfg/lxc.json'), true);
+foreach ($replication as $item) {
+  $replication_containers[$item['NAME']] = array(
+    'NAME' => $item['NAME'],
+    'STOP_CONTAINER' => $item['STOP_CONTAINER'],
+    'AUTOSTART' => $item['AUTOSTART']
+  );
+}
+
+// Display message no containers found if none found
+if(empty($lxc_containers)) {
+	echo '<p>&nbsp;</p><h2 style="text-align: center;"><strong><span style="color: #ff0000;">No LXC containers found!</span><br /></strong></h1>';
+} else {
+  $lxc_containers = explode("\n", trim($lxc_containers));
+	echo '<form method="post">';
+	echo '<div style="display: flex; flex-wrap: wrap; justify-content: center;">';
+	// Loop through containers
+	foreach ($lxc_containers as $lxc_container) {
+	  // Extract container details from configuration file (not strictly a ini file
+    $container_distribution = trim(shell_exec("grep -oP '(?<=dist )\w+' " . $lxc_path . "/" . $lxc_container . "/config | head -1 | sed 's/\"//g'"));
+    $container_release = trim(shell_exec("grep -oP '(?<=release )\w+' " . $lxc_path . "/" . $lxc_container . "/config | head -1 | sed 's/\"//g'"));
+	  $container_autostart = trim(shell_exec("grep 'lxc.start.auto' " . $lxc_path . "/" . $lxc_container . "/config | cut -d '=' -f2"));
+	  $container_description = trim(shell_exec("grep '#container_description' ". $lxc_path . "/" . $lxc_container . "/config | cut -d '=' -f2"));
+	  // Get custom or default container icons
+    if(file_exists($lxc_path . '/custom-icons/' . $lxc_container . '.png')) {
+      $icon = $lxc_path . '/custom-icons/' . $lxc_container . '.png';
+    } elseif(file_exists('/usr/local/emhttp/plugins/lxc/images/distributions/' . $container_distribution . '.png')) {
+      $icon = '/plugins/lxc/images/distributions/' . $container_distribution . '.png';
+    } else {
+      $icon = '/plugins/dynamix.docker.manager/images/question.png';
+	  }
+	  // Get container stop on Replication
+    if (isset($replication_containers[$lxc_container]) && $replication_containers[$lxc_container]['STOP_CONTAINER'] !== false) {
+      $stop_container = 'checked';
+    } else {
+      $stop_container = '';
+    }
+    // Get container Client Autostart
+    if (isset($replication_containers[$lxc_container]) && $replication_containers[$lxc_container]['AUTOSTART'] !== false) {
+      $client_autostart = 'checked';
+    } else {
+      $client_autostart = '';
+    }
+		echo '<div style="min-width: 300px; min-height: 100px; border: 1px solid #ccc; margin: 5px; box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.1);">';
+		echo '<img src="' . $icon . '" class="img" width="30" height="30">';
+		echo '<b style="color: #ff5e4d; font-size: larger;">' . $lxc_container . '</b>';
+		echo '<div style="padding: 20px;">';
+		echo '<span style="padding: 10px;"><table style="width: 80%; text-align: left; line-height: 0.5;">';
+		echo '<input type="text" name="' . $lxc_container . '[NAME]" value="' . $lxc_container . '" hidden>';
+		echo '<tr title="Enable/Disable Replication from LXC Container: ' . $lxc_container . '"><td>Replication:</td><td><input type="checkbox" name="' . $lxc_container . '[REPLICATION]"' . (array_key_exists((string)$lxc_container, $replication_containers) ? ' checked' : '') . '></td></tr>';
+    echo '<tr title="Stop LXC Container while replicating (recommended)"><td>Stop Container:</td><td><input type="checkbox" name="' . $lxc_container . '[STOP_CONTAINER]" ' . $stop_container . '></td></tr>';
+		echo '<tr><td>Distribution:</td><td>' . $container_distribution . '</td></tr>';
+		echo '<tr><td>Release:</td><td>' . $container_release . '</td></tr>';
+		if(!empty($container_description)) {
+      echo '<tr><td>Description:</td><td>' . $container_description . '</td></tr>';
+    }
+		echo '<tr><td>Host Autostart:</td><td><input type="checkbox" ' . ($container_autostart === '1' ? 'checked' : '') . ' disabled></td></tr>';
+    echo '<tr title="Enable Autostart on Client machine (applies if keepalived and Autostart from containers on Client is enabled)"><td>Client Autostart:</td><td><input type="checkbox" name="' . $lxc_container . '[AUTOSTART]" ' . $client_autostart . '></td></tr>';
+		echo '</tr>';
+		echo '</table></span>';
+		echo '</div>';
+		echo '</div>';
+	}
+	echo '</div>';
+  echo '<button type="submit" name="apply_lxc">Update</button></form>';
+}
+
+if (isset($_POST['apply_lxc'])) {
+  $data = [];
+  foreach ($_POST as $containerName => $containerData) {
+    if (!is_array($containerData)) {
+      continue;
+    }
+    if (isset($containerData['REPLICATION']) && $containerData['REPLICATION'] === 'on') {
+      $container = [
+        'NAME' => $containerData['NAME'],
+        'STOP_CONTAINER' => false,
+        'AUTOSTART' => false
+         ];
+      if (!empty($containerData['STOP_CONTAINER'])) {
+        $container['STOP_CONTAINER'] = $containerData['STOP_CONTAINER'];
+      }
+      if (!empty($containerData['AUTOSTART'])) {
+        $container['AUTOSTART'] = $containerData['AUTOSTART'];
+      }
+      $data[] = $container;
+    }
+  }
+  file_put_contents('/boot/config/plugins/unraid-replication/replication_cfg/lxc.json', json_encode($data, JSON_PRETTY_PRINT));
+  echo '<script>parent.window.location.reload();</script>';
+} ?>

@@ -1,0 +1,33 @@
+#!/bin/bash
+# Create directory if not found
+if [ ! -f /boot/config/plugins/unraid-replication/cert/reverse ]; then
+  mkdir -p /boot/config/plugins/unraid-replication/cert/reverse
+fi
+# Remove old SSH Key Pair if found
+if [ -f /boot/config/plugins/unraid-replication/cert/reverse ]; then
+  rm -f /boot/config/plugins/unraid-replication/cert/reverse/client /boot/config/plugins/unraid-replication/cert/client.pub
+fi
+# Generate SSH Key Pair
+ssh-keygen -t rsa -b 4096 -f /boot/config/plugins/unraid-replication/cert/reverse/client > /dev/null 2>&1
+
+# Get variables
+HOST="$(cat /boot/config/plugins/unraid-replication/settings.cfg | grep 'HOST' | cut -d '=' -f2 | sed 's/\"//g')"
+SSH_CERT="/boot/config/plugins/unraid-replication/cert/replication"
+
+# Construct HOST string
+if [[ "${HOST}" == *:* ]]; then
+  HOST="${HOST%%:*}"
+  SSH_PORT=" -p ${HOST#*:}"
+  SCP_PORT=" -P ${HOST#*:}"
+else
+  SSH_PORT=""
+  SCP_PORT=""
+fi
+
+ssh ${SSH_PORT} -i ${SSH_CERT} root@${HOST} "mkdir -p /boot/config/plugins/unraid-replication/cert/reverse" > /dev/null 2>&1
+ssh ${SSH_PORT} -i ${SSH_CERT} root@${HOST} "sed -i \"/^HOST=/c\HOST=${1}\" /boot/config/plugins/unraid-replication/settings.cfg" > /dev/null 2>&1
+scp ${SCP_PORT} -i ${SSH_CERT} /boot/config/plugins/unraid-replication/cert/reverse/client root@${HOST}:/boot/config/plugins/unraid-replication/cert/reverse/client > /dev/null 2>&1
+
+/usr/local/emhttp/plugins/unraid-replication/scripts/reverse_inject_public_key
+
+ssh ${SSH_PORT} -i ${SSH_CERT} root@${HOST} "/usr/local/emhttp/plugins/unraid-replication/scripts/check_ssh_connection \"${1}\" \"reverse\"" > /dev/null 2>&1

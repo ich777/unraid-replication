@@ -1,0 +1,295 @@
+#!/bin/bash
+# Read config and get initial variable
+CONFIG="$(cat /boot/config/plugins/unraid-replication/settings.cfg)"
+SYSLOG_LOGGING="$(echo "${CONFIG}" | grep 'SYSLOG_LOGGING' | cut -d '=' -f2 | sed 's/\"//g')"
+
+# Function for removing lockfile
+remove_lockfile() {
+  if [ -f "/var/run/unraid-replication.lock" ]; then
+    rm "/var/run/unraid-replication.lock"
+  fi
+}
+
+# Trap exit and remove lockifle
+trap 'remove_lockfile' EXIT
+
+# Check if script is already running
+if [ -f /var/run/unraid-replication.lock ]; then
+  echo "Error: Unraid-Replication already running"
+  exit 1
+fi
+touch /var/run/unraid-replication.lock
+
+# Determine if logging is set to syslog or /var/log/unraid-replication
+if [[ "${SYSLOG_LOGGING}" == "true" || "${SYSLOG_LOGGING}" == "1" ]]; then
+  if [ -f /var/log/unraid-replication ]; then
+    rm /var/log/unraid-replication
+  fi
+  log_message() {
+    while IFS= read -r line; do
+      logger "unraid-replication: ${line}"
+    done
+  }
+  echo "Info: Unraid-Replication starting"
+  exec > >(log_message) 2>&1
+else
+  echo "Info: Unraid-Replication starting $(date +"%Y-%m-%d %H:%M:%S")"
+  exec >> /var/log/unraid-replication 2>&1
+fi
+
+# Check if instancy type is host
+INSTANCE_TYPE="$(echo "${CONFIG}" | grep 'INSTANCE_TYPE' | cut -d '=' -f2 | sed 's/\"//g')"
+if [ "${INSTANCE_TYPE}" != "host" ]; then
+  echo "Error: You can only run this when the instance type is Host"
+  exit 1
+fi
+
+# Get replication settings
+DOCKER_REPLICATION="$(echo "${CONFIG}" | grep 'DOCKER_REPLICATION' | cut -d '=' -f2 | sed 's/\"//g')"
+LXC_REPLICATION="$(echo "${CONFIG}" | grep 'LXC_REPLICATION' | cut -d '=' -f2 | sed 's/\"//g')"
+VM_REPLICATION="$(echo "${CONFIG}" | grep 'VM_REPLICATION' | cut -d '=' -f2 | sed 's/\"//g')"
+
+# Exit script if no replication settings is choosen
+if [[ "${DOCKER_REPLICATION}" != "enabled" && "${LXC_REPLICATION}" != "enabled" && "${VM_REPLICATION}" != "enabled" ]]; then
+  echo "Error: No replication set"
+  exit 1
+fi
+
+# Get variables (again)
+TMP_PATH="$(echo "${CONFIG}" | grep 'TMP_PATH' | cut -d '=' -f2 | sed 's/\"//g')"
+TRANSFER_TYPE="$(echo "${CONFIG}" | grep 'TRANSFER_TYPE' | cut -d '=' -f2 | sed 's/\"//g')"
+# If host is passed over as argument then use argument as host IP/Hostname and
+# check for port
+if [ ! -z "${1}" ]; then
+  HOST="${1}"
+  if [[ "${HOST}" == *:* ]]; then
+    HOST="${HOST%%:*}"
+    SSH_PORT=" -p ${HOST#*:}"
+    SCP_PORT=" -P ${HOST#*:}"
+  else
+    SSH_PORT=""
+    SCP_PORT=""
+  fi
+  SSH_CHECK="${HOST}"
+else
+  HOST="$(echo "${CONFIG}" | grep 'HOST' | cut -d '=' -f2 | sed 's/\"//g')"
+  if [[ "${HOST}" == *:* ]]; then
+    HOST="${HOST%%:*}"
+    SSH_PORT=" -p ${HOST#*:}"
+    SCP_PORT=" -P ${HOST#*:}"
+  else
+    SSH_PORT=""
+    SCP_PORT=""
+  fi
+  SSH_CHECK="${HOST}"
+fi
+# Set default temporary path if none is set
+if [ -z "${TMP_PATH}" ]; then
+  TMP_PATH="/tmp/unraid-replication"
+fi
+# Detect if Reverse Replication is already running on Master macine and abort script if running
+if [ -f "${TMP_PATH}/clientReplication" ]; then
+  echo "Error: Reverse Replication already running"
+  exit 1
+fi
+# Check if reverse replication is set
+if [ -f "${TMP_PATH}/reverseReplication" ]; then
+  REV_REPLICATION="$(cat ${TMP_PATH}/reverseReplication)"
+fi
+
+# Check which transfer type is choosen (maybe another transfer type is added later on)
+if [ -z "${TRANSFER_TYPE}" ]; then
+  # Exit if not transfer type is found
+  echo "Error: No transfer type specified"
+  exit 1
+elif [ "${TRANSFER_TYPE}" == "ssh" ]; then
+  # Exit if no Private Key is found
+  SSH_CERT="/boot/config/plugins/unraid-replication/cert/replication"
+  if [ -z "${SSH_CERT}" ]; then
+    echo "Error: No Private Key found"
+    exit 1
+  fi
+  # Check if connection to remote host is possible
+  if ! /usr/local/emhttp/plugins/unraid-replication/scripts/check_ssh_connection ${SSH_CHECK} ; then
+    exit 1
+  fi
+  # Check if Array on remote host is started
+  ARRAY_STATUS="$(ssh ${SSH_PORT} -i ${SSH_CERT} root@${HOST} "cat /usr/local/emhttp/state/var.ini | grep 'fsState' | cut -d '=' -f2 | sed 's/\"//g'" 2>/dev/null)"
+  if [ "${ARRAY_STATUS}" != "Started" ]; then
+    echo "Error: Array on remote host not started"
+    exit 1
+  fi
+  # Check if Unraid-Replication is installed on remote host
+  ssh ${SSH_PORT} -i ${SSH_CERT} root@${HOST} "test -f /boot/config/plugins/unraid-replication.plg" > /dev/null 2>&1
+  if [ $? -ne 0 ]; then
+    echo "Error: Unraid-Replication Plugin not found on remote host"
+    exit 1
+  fi
+  # Get remote temporary path and create it on remote host
+  REMOTE_TMP_PATH=$(ssh ${SSH_PORT} -i ${SSH_CERT} root@${HOST} "cat /boot/config/plugins/unraid-replication/settings.cfg | grep 'TMP_PATH' | cut -d '=' -f2" 2>/dev/null)
+  if [ -z "${REMOTE_TMP_PATH}" ]; then
+    REMOTE_TMP_PATH="/tmp/unraid-replication"
+  fi
+  ssh ${SSH_PORT} -i ${SSH_CERT} root@${HOST} "mkdir -p ${TMP_PATH}/replication_cfg" > /dev/null 2>&1
+  # Copy over reverse replication check file and kill keepalived on Master
+  if [ ! -z "${REV_REPLICATION}" ]; then
+    scp ${SCP_PORT} -i ${SSH_CERT} ${TMP_PATH}/reverseReplication root@${HOST}:${TMP_PATH}/reverseReplication > /dev/null 2>&1
+    kill $(pidof keepalived)
+  fi
+fi
+
+# Docker replication task
+if [ "${DOCKER_REPLICATION}" == "enabled" ]; then
+  echo "Info: Starting Docker Replication"
+  mkdir -p ${TMP_PATH}/docker
+  # Determine transfer type
+  if [ "${TRANSFER_TYPE}" == "ssh" ]; then
+    # Create necessary directories on remote host and transfer replication configuration
+    ssh ${SSH_PORT} -i ${SSH_CERT} root@${HOST} "mkdir -p /boot/config/plugins/dockerMan/templates-user ${REMOTE_TMP_PATH}/docker" > /dev/null 2>&1
+    scp ${SCP_PORT} -i ${SSH_CERT} /boot/config/plugins/unraid-replication/replication_cfg/docker.json root@${HOST}:/boot/config/plugins/unraid-replication/replication_cfg/docker.json > /dev/null 2>&1
+    # Get containers and replicate them one by one
+    DOCKER_REPLICATION_JSON="$(cat /boot/config/plugins/unraid-replication/replication_cfg/docker.json | jq -r '.[]')"
+    CONTAINERS="$(echo "$DOCKER_REPLICATION_JSON" | jq -r '.NAME')"
+    if [[ -z "${CONTAINERS}" || "${CONTAINERS}" == "null" ]]; then
+      echo "Error: No Docker containers to replicate specified"
+      return
+    fi
+    IFS=$'\n'
+    for container in $CONTAINERS; do
+      if ! docker inspect ${container} >/dev/null 2>&1 ; then
+        echo "Error: Docker container: ${container} not found, skipping!"
+        continue
+      fi
+      # Create config json file, create snapshot from container images, pack snapshot, 
+      # send xml and other files to remote host, remove snapshot and archive from host
+      echo "Info: Replication from container ${container} starting"
+      echo "$(docker inspect ${container})" > ${TMP_PATH}/docker/${container}.json
+      scp ${SCP_PORT} -i ${SSH_CERT} ${TMP_PATH}/docker/${container}.json root@${HOST}:${REMOTE_TMP_PATH}/docker/${container}.json 2>/dev/null
+      scp ${SCP_PORT} -i ${SSH_CERT} /boot/config/plugins/dockerMan/templates-user/my-${container}.xml root@${HOST}:/boot/config/plugins/dockerMan/templates-user/my-${container}.xml 2>/dev/null
+      repository="$(docker inspect --format='{{.Config.Image}}' ${container})"
+      # Stop container if specified
+      if [ "$(echo ${DOCKER_REPLICATION_JSON} | jq -r --arg name "${container}" 'select(.NAME == $name) | .STOP_CONTAINER')" == "on" ] ; then
+        docker container stop ${container}
+      fi
+      docker commit ${container} ur_replication_${repository}
+      docker save ur_replication_$repository > ${TMP_PATH}/docker/ur_replication_${container}.tar
+      docker image rm ur_replication_${repository} 
+      scp ${SCP_PORT} -i ${SSH_CERT} ${TMP_PATH}/docker/ur_replication_${container}.tar root@${HOST}:${REMOTE_TMP_PATH}/docker/ur_replication_${container}.tar 2>/dev/null
+      # Stop container on remote host, get container paths to sync and sync them one by
+      # one to remote host (if base path is not found skip and display message)
+      ssh ${SSH_PORT} -i ${SSH_CERT} root@${HOST} "docker stop ${container}" > /dev/null 2>&1
+      container_paths="$(cat /boot/config/plugins/unraid-replication/replication_cfg/docker.json | jq -r --arg name "${container}" '.[] | select(.NAME == $name) | .PATHS[]')"
+      for path in $container_paths; do
+        ssh ${SSH_PORT} -i ${SSH_CERT} root@${HOST} "test -e $(echo "${path}" | cut -d '/' -f-4)" > /dev/null 2>&1
+        if [ $? -ne 0 ]; then
+          echo "Info: Path: $(echo "${path}" | cut -d '/' -f-4) on remote host not found, skipping..."
+          continue
+        fi
+        echo "Info: Starting sync from path: ${path} for container: ${container}"
+        ssh ${SSH_PORT} -i ${SSH_CERT} root@${HOST} "mkdir -p ${path}" > /dev/null 2>&1
+        rsync -avz -e "ssh ${SSH_PORT} -i ${SSH_CERT}" "${path%"${path##*[!/]}"}/" root@${HOST}:"${path%"${path##*[!/]}"}/" 2>/dev/null
+      done
+      # Start container if it was running before on host
+      if [ "$(echo ${DOCKER_REPLICATION_JSON} | jq -r --arg name "${container}" 'select(.NAME == $name) | .STOP_CONTAINER')" == "on" ] ; then
+        if [ "$(cat ${TMP_PATH}/docker/${container}.json | jq -r '.[].State.Status')" == "running" ]; then
+          docker container start ${container}
+        fi
+      fi
+      # Remove temporary files from host and start replication task on remote host
+      rm ${TMP_PATH}/docker/ur_replication_${container}.tar ${TMP_PATH}/docker/${container}.json
+      ssh ${SSH_PORT} -i ${SSH_CERT} root@${HOST} "/usr/local/emhttp/plugins/unraid-replication/scripts/client_sync_docker $container" 2>/dev/null
+      echo "Info: Replication from container: ${container} finished"
+    done
+    # Create container order file on remote host
+    ssh ${SSH_PORT} -i ${SSH_CERT} root@${HOST} "cat /boot/config/plugins/unraid-replication/replication_cfg/docker.json | jq -r '.[].NAME' | awk '{print (NR-1) \"=\" \$0}' > /boot/config/plugins/dockerMan/userprefs.cfg" > /dev/null 2>&1
+  fi
+  echo "Info: Docker Replication finished"
+fi
+
+# LXC replication task
+if [ "${LXC_REPLICATION}"  == "enabled" ]; then
+  # Get LXC config from host
+  echo "Info: Starting LXC Replication"
+  LXC_SETTINGS="$(cat /boot/config/plugins/lxc/plugin.cfg)"
+  LXC_BDEVTYPE="$(echo "${LXC_SETTINGS}" | grep 'BDEVTYPE' | cut -d '=' -f2 | sed 's/\"//g')"
+  LXC_PATH="$(cat /boot/config/plugins/lxc/lxc.conf | grep 'lxcpath' | cut -d '=' -f2 | sed 's/\"//g')"
+  # Exit LXC replication if backing storage type is not btrfs nor zfs
+  if [[ "${LXC_BDEVTYPE}" != "btrfs" && "${LXC_BDEVTYPE}" != "zfs" ]]; then
+    echo "Error: Only BTRFS and ZFS as Backing Storage Type are supported! LXC Replication failed"
+    return
+  fi
+  mkdir -p ${TMP_PATH}/lxc
+  # Determine transfer type
+  if [ "${TRANSFER_TYPE}" == "ssh" ]; then
+    # Create necessary directories on remote host and transfer replication configuration
+    ssh ${SSH_PORT} -i ${SSH_CERT} root@${HOST} "mkdir -p ${REMOTE_TMP_PATH}/lxc" > /dev/null 2>&1
+    scp ${SCP_PORT} -i ${SSH_CERT} /boot/config/plugins/unraid-replication/replication_cfg/lxc.json root@${HOST}:/boot/config/plugins/unraid-replication/replication_cfg/lxc.json > /dev/null 2>&1
+    # Get containers and replicate them one by one
+    LXC_REPLICATION_JSON="$(cat /boot/config/plugins/unraid-replication/replication_cfg/lxc.json | jq -r '.[]')"
+    CONTAINERS="$(cat /boot/config/plugins/unraid-replication/replication_cfg/lxc.json | jq -r '.[].NAME')"
+    if [[ -z "${CONTAINERS}" || "${CONTAINERS}" == "null" ]]; then
+      echo "Error: No Docker containers to replicate specified"
+      return
+    fi
+    IFS=$'\n'
+    for container in $CONTAINERS; do
+      if ! lxc-info ${container} >/dev/null 2>&1 ; then
+        echo "Error: LXC container: ${container} not found, skipping!"
+        continue
+      fi
+      # Determine backing storage type
+      echo "Info: Replication from container ${container} starting"
+      if [ "${LXC_BDEVTYPE}" == "btrfs" ]; then
+        # Create snapshot directory, create snapshot from container, copy over continer
+        # config/icon, create tar archive and copy it to remote host
+        mkdir -p ${LXC_PATH}/.ur_replication/${container}
+        # Stop container if specified and save current container state
+        if [ "$(echo ${LXC_REPLICATION_JSON} | jq -r --arg name "${container}" 'select(.NAME == $name) | .STOP_CONTAINER')" == "on" ] ; then
+          CONTAINER_STATE="$(lxc-info ${container} | grep "State:")"
+          lxc-stop ${container}
+        fi
+        btrfs sub snap ${LXC_PATH}/${container}/rootfs ${LXC_PATH}/.ur_replication/${container}
+        cp ${LXC_PATH}/${container}/config ${LXC_PATH}/.ur_replication/${container}/config
+        if [ -f ${LXC_PATH}/custom-icons/${container}.png ]; then
+          cp ${LXC_PATH}/custom-icons/${container}.png ${LXC_PATH}/.ur_replication/${container}
+        fi
+        cd ${LXC_PATH}/.ur_replication/${container}
+        tar --remove-files -cf ${LXC_PATH}/.ur_replication/${container}.tar . 2>/dev/null
+        scp ${SCP_PORT} -i ${SSH_CERT} ${LXC_PATH}/.ur_replication/${container}.tar root@${HOST}:${TMP_PATH}/lxc/${container}.tar 2>/dev/null
+      elif [ "${LXC_BDEVTYPE}" == "zfs" ]; then
+        echo "Info: ZFS backing storage type is not implemented yet"
+        return
+      fi
+      # Start container if it was running before on host
+      if [ "$(echo ${LXC_REPLICATION_JSON} | jq -r --arg name "${container}" 'select(.NAME == $name) | .STOP_CONTAINER')" == "on" ] ; then
+        if grep -q "RUNNING" <<<${CONTAINER_STATE} ; then
+          lxc-start ${container}
+        fi
+      fi
+      unset CONTAINER_STATE
+      # Remove temporary files from host and start replication task on remote host
+      rm -rf ${LXC_PATH}/.ur_replication/${container}.tar ${REMOTE_TMP_PATH}/${container} ${LXC_PATH}/.ur_replication/${container}
+      ssh ${SSH_PORT} -i ${SSH_CERT} root@${HOST} "/usr/local/emhttp/plugins/unraid-replication/scripts/client_sync_lxc $container" 2>/dev/null
+    done
+  fi
+  echo "Info: LXC Replication finished"
+fi
+
+# VM replication task
+if [ "${VM_REPLICATION}" == "enabled" ]; then
+  echo "Info: VM Replication TBD"
+fi
+
+# Display finish message
+if [[ "${SYSLOG_LOGGING}" == "true" || "${SYSLOG_LOGGING}" == "1" ]]; then
+  echo "Info: Unraid-Replication finished"
+else
+  echo "Info: Unraid-Replication finished $(date +"%Y-%m-%d %H:%M:%S")"
+fi
+
+# Reboot or Shutdown if reverse replication is enabled
+if [ "${REV_REPLICATION}" == "reboot" ]; then
+  reboot
+elif [ "${REV_REPLICATION}" == "shutdown" ]; then
+  shutdown -h now
+fi

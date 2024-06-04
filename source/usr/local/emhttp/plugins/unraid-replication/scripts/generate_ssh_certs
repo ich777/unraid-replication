@@ -1,0 +1,7 @@
+#!/bin/bash
+# Remove old SSH Key Pair if found
+if [ -f /boot/config/plugins/unraid-replication/cert/replication ]; then
+  rm -f /boot/config/plugins/unraid-replication/cert/replication /boot/config/plugins/unraid-replication/cert/replication.pub
+fi
+# Generate SSH Key Pair
+ssh-keygen -t rsa -b 4096 -f /boot/config/plugins/unraid-replication/cert/replication > /dev/null 2>&1

@@ -1,0 +1,20 @@
+#!/bin/bash
+# Remove old SSH Key Pair
+rm -f /boot/config/plugins/unraid-replication/cert/reverse/*
+
+# Get variables
+HOST="$(cat /boot/config/plugins/unraid-replication/settings.cfg | grep 'HOST' | cut -d '=' -f2 | sed 's/\"//g')"
+SSH_CERT="/boot/config/plugins/unraid-replication/cert/replication"
+
+# Construct HOST string
+if [[ "${HOST}" == *:* ]]; then
+  HOST="${HOST%%:*}"
+  SSH_PORT=" -p ${HOST#*:}"
+  SCP_PORT=" -P ${HOST#*:}"
+else
+  SSH_PORT=""
+  SCP_PORT=""
+fi
+
+ssh ${SSH_PORT} -i ${SSH_CERT} root@${HOST} "rm -f /boot/config/plugins/unraid-replication/cert/reverse/*" > /dev/null 2>&1
+ssh ${SSH_PORT} -i ${SSH_CERT} root@${HOST} "sed -i \"/^HOST=/c\HOST=\" /boot/config/plugins/unraid-replication/settings.cfg" > /dev/null 2>&1

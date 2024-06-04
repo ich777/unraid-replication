@@ -1,0 +1,290 @@
+#!/bin/bash
+# Read config and get initial variable
+CONFIG="$(cat /boot/config/plugins/unraid-replication/settings.cfg)"
+
+# Function for removing lockfile
+remove_lockfile() {
+  if [ -f "/var/run/reverse-replication.lock" ]; then
+    rm "/var/run/reverse-replication.lock"
+  fi
+}
+
+# Trap exit and remove lockifle
+trap 'remove_lockfile' EXIT
+
+# Check if script is already running
+if [ -f /var/run/reverse-replication.lock ]; then
+  echo "Error: Reverse-Replication already running"
+  exit 1
+fi
+touch /var/run/reverse-replication.lock
+
+log_message() {
+  while IFS= read -r line; do
+    logger "reverse-replication: ${line}"
+  done
+}
+echo "Info: Reverse-Replication starting"
+exec > >(log_message) 2>&1
+
+# Check if instancy type is client
+INSTANCE_TYPE="$(echo "${CONFIG}" | grep 'INSTANCE_TYPE' | cut -d '=' -f2 | sed 's/\"//g')"
+if [ "${INSTANCE_TYPE}" != "client" ]; then
+  echo "Error: You can only run this when the instance type is Client"
+  exit 1
+fi
+
+# Get replication settings
+DOCKER_REPLICATION="$(echo "${CONFIG}" | grep 'DOCKER_REPLICATION' | cut -d '=' -f2 | sed 's/\"//g')"
+LXC_REPLICATION="$(echo "${CONFIG}" | grep 'LXC_REPLICATION' | cut -d '=' -f2 | sed 's/\"//g')"
+VM_REPLICATION="$(echo "${CONFIG}" | grep 'VM_REPLICATION' | cut -d '=' -f2 | sed 's/\"//g')"
+
+# Exit script if no replication settings is choosen
+if [[ "${DOCKER_REPLICATION}" != "enabled" && "${LXC_REPLICATION}" != "enabled" && "${VM_REPLICATION}" != "enabled" ]]; then
+  echo "Error: No replication set"
+  exit 1
+fi
+
+# Get variables (again)
+TMP_PATH="$(echo "${CONFIG}" | grep 'TMP_PATH' | cut -d '=' -f2 | sed 's/\"//g')"
+TRANSFER_TYPE=ssh
+# Construct HOST variable
+HOST="$(echo "${CONFIG}" | grep 'HOST' | cut -d '=' -f2 | sed 's/\"//g')"
+if [[ "${HOST}" == *:* ]]; then
+  HOST="${HOST%%:*}"
+  SSH_PORT=" -p ${HOST#*:}"
+  SCP_PORT=" -P ${HOST#*:}"
+else
+  SSH_PORT=""
+  SCP_PORT=""
+fi
+SSH_CHECK="${HOST}"
+# Set default temporary path if none is set
+if [ -z "${TMP_PATH}" ]; then
+  TMP_PATH="/tmp/unraid-replication"
+fi
+
+# Check which transfer type is choosen (maybe another transfer type is added later on)
+if [ -z "${TRANSFER_TYPE}" ]; then
+  # Exit if not transfer type is found
+  echo "Error: No transfer type specified"
+  exit 1
+elif [ "${TRANSFER_TYPE}" == "ssh" ]; then
+  # Exit if no Private Key is found
+  SSH_CERT="/boot/config/plugins/unraid-replication/cert/reverse/client"
+  if [ -z "${SSH_CERT}" ]; then
+    echo "Error: No Private Key found"
+    exit 1
+  fi
+  # Check if connection to remote host is possible
+  if ! /usr/local/emhttp/plugins/unraid-replication/scripts/check_ssh_connection ${SSH_CHECK} reverse ; then
+    exit 1
+  fi
+  # Get remote temporary path and create it on remote host
+  REMOTE_TMP_PATH=$(ssh ${SSH_PORT} -i ${SSH_CERT} root@${HOST} "cat /boot/config/plugins/unraid-replication/settings.cfg | grep 'TMP_PATH' | cut -d '=' -f2" 2>/dev/null)
+  if [ -z "${REMOTE_TMP_PATH}" ]; then
+    REMOTE_TMP_PATH="/tmp/unraid-replication"
+  fi
+  ssh ${SSH_PORT} -i ${SSH_CERT} root@${HOST} "mkdir -p ${TMP_PATH}/replication_cfg" > /dev/null 2>&1
+  # Create control file on Master server that Reverse Replication is running
+  ssh ${SSH_PORT} -i ${SSH_CERT} root@${HOST} "touch ${TMP_PATH}/clientReplication" > /dev/null 2>&1
+fi
+
+# Wait for Array on Master server to come online
+while true; do
+  ARRAY_STATUS="$(ssh ${SSH_PORT} -i ${SSH_CERT} root@${HOST} "cat /usr/local/emhttp/state/var.ini | grep 'fsState' | cut -d '=' -f2 | sed 's/\"//g'" 2>/dev/null)"
+  if [ "${ARRAY_STATUS}" == "Started" ]; then
+    echo "Info: Array on Master server now online"
+    break
+  fi
+  echo "Info: Array on Master server not online, checking again in 30 seconds"
+  sleep 30
+done
+
+# Docker replication task
+if [ "${DOCKER_REPLICATION}" == "enabled" ]; then
+  # Wait for Docker service to become available
+  while true; do
+    DOCKER_SOCKET="$(ssh ${SSH_PORT} -i ${SSH_CERT} root@${HOST} "test -S /var/run/docker.sock && echo 0 || echo 1" 2>/dev/null)"
+    if [ "${DOCKER_SOCKET}" == "0" ]; then
+      echo "Info: Docker Service on Master server started"
+      break
+    fi
+    echo "Info: Docker Service on Master server not started, checking again in 30 seconds"
+    sleep 30
+  done
+  DOCKER_AUTOSTART="$(ssh ${SSH_PORT} -i ${SSH_CERT} root@${HOST} "cat /var/lib/docker/unraid-autostart" 2>/dev/null)"
+  echo "Info: Starting Docker Reverse Replication"
+  mkdir -p ${TMP_PATH}/docker
+  # Determine transfer type
+  if [ "${TRANSFER_TYPE}" == "ssh" ]; then
+    # Create necessary directories on remote host and transfer replication configuration
+    ssh ${SSH_PORT} -i ${SSH_CERT} root@${HOST} "mkdir -p /boot/config/plugins/dockerMan/templates-user ${REMOTE_TMP_PATH}/docker" > /dev/null 2>&1
+    # Get containers and replicate them one by one
+    DOCKER_REPLICATION_JSON="$(cat /boot/config/plugins/unraid-replication/replication_cfg/docker.json | jq -r '.[]')"
+    CONTAINERS="$(echo "$DOCKER_REPLICATION_JSON" | jq -r '.NAME')"
+    if [[ -z "${CONTAINERS}" || "${CONTAINERS}" == "null" ]]; then
+      echo "Error: No Docker containers to replicate specified"
+      return
+    fi
+    IFS=$'\n'
+    for container in $CONTAINERS; do
+      if ! docker inspect ${container} >/dev/null 2>&1 ; then
+        echo "Error: Docker container: ${container} not found, skipping!"
+        continue
+      fi
+      # Check if Autostart from container is enabled and wait for it to come online
+      # Skip check if container relies on other network
+
+      if grep -q "^${container}" <<<${DOCKER_AUTOSTART} ; then 
+        echo "Info: Autostart form Docker Container: ${container} enabled, waiting for start from Container"
+        NET="$(echo "${DOCKER_REPLICATION_JSON}" | jq -r --arg name "${container}" 'select(.NAME == $name) | .NETWORK')"
+        while true; do
+          if [[ ${NET} =~ ^container: ]]; then
+            CONTAINER_STATUS="running"
+          else
+            CONTAINER_STATUS="$(ssh ${SSH_PORT} -i ${SSH_CERT} root@${HOST} "docker inspect --format='{{.State.Status}}' ${container}" 2>/dev/null)"          
+          fi
+          if [ "${CONTAINER_STATUS}" == "running" ]; then
+            echo "Info: Docker Container: ${container} started, stopping Container"
+            ssh ${SSH_PORT} -i ${SSH_CERT} root@${HOST} "docker container stop ${container}" 2>/dev/null
+            break
+          fi
+          echo "Info: Docker Container: ${container} not running, checking again in 10 seconds"
+          sleep 10
+        done
+      fi
+      # Make sure container is stopped on Master machine (which can happen when Docker not sucessfull stopping on Master machine)
+      ssh ${SSH_PORT} -i ${SSH_CERT} root@${HOST} "docker stop ${container}" > /dev/null 2>&1
+      # Create config json file, create snapshot from container images, pack snapshot, 
+      # send xml and other files to remote host, remove snapshot and archive from host
+      echo "Info: Reverse Replication from container ${container} starting"
+      echo "$(docker inspect ${container})" > ${TMP_PATH}/docker/${container}.json
+      scp ${SCP_PORT} -i ${SSH_CERT} ${TMP_PATH}/docker/${container}.json root@${HOST}:${REMOTE_TMP_PATH}/docker/${container}.json 2>/dev/null
+      scp ${SCP_PORT} -i ${SSH_CERT} /boot/config/plugins/dockerMan/templates-user/my-${container}.xml root@${HOST}:/boot/config/plugins/dockerMan/templates-user/my-${container}.xml 2>/dev/null
+      repository="$(docker inspect --format='{{.Config.Image}}' ${container})"
+      docker container stop ${container}
+      docker commit ${container} ur_replication_${repository}
+      docker save ur_replication_$repository > ${TMP_PATH}/docker/ur_replication_${container}.tar
+      docker image rm ur_replication_${repository} 
+      scp ${SCP_PORT} -i ${SSH_CERT} ${TMP_PATH}/docker/ur_replication_${container}.tar root@${HOST}:${REMOTE_TMP_PATH}/docker/ur_replication_${container}.tar 2>/dev/null
+      # Get container paths to sync and sync them one by one to Master machine
+      # (if base path is not found skip and display message)
+      container_paths="$(cat /boot/config/plugins/unraid-replication/replication_cfg/docker.json | jq -r --arg name "${container}" '.[] | select(.NAME == $name) | .PATHS[]')"
+      for path in $container_paths; do
+        ssh ${SSH_PORT} -i ${SSH_CERT} root@${HOST} "test -e $(echo "${path}" | cut -d '/' -f-4)" > /dev/null 2>&1
+        if [ $? -ne 0 ]; then
+          echo "Info: Path: $(echo "${path}" | cut -d '/' -f-4) on remote host not found, skipping..."
+          continue
+        fi
+        echo "Info: Starting sync from path: ${path} for container: ${container}"
+        ssh ${SSH_PORT} -i ${SSH_CERT} root@${HOST} "mkdir -p ${path}" > /dev/null 2>&1
+        rsync -avz -e "ssh ${SSH_PORT} -i ${SSH_CERT}" "${path%"${path##*[!/]}"}/" root@${HOST}:"${path%"${path##*[!/]}"}/" 2>/dev/null
+      done
+      # Remove temporary files from host and start replication task on remote host
+      rm ${TMP_PATH}/docker/ur_replication_${container}.tar ${TMP_PATH}/docker/${container}.json
+      ssh ${SSH_PORT} -i ${SSH_CERT} root@${HOST} "/usr/local/emhttp/plugins/unraid-replication/scripts/client_sync_docker $container" 2>/dev/null
+      echo "Info: Reverse Replication from container: ${container} finished"
+      # Start container Autostart is enabled on Master machine
+      if [ "${CONTAINER_STATUS}" == "running" ]; then
+        echo "Info: Starting container: ${container} on Master machine"
+        ssh ${SSH_PORT} -i ${SSH_CERT} root@${HOST} "docker container start ${container}" 2>/dev/null
+      fi
+      unset CONTAINER_STATUS
+    done
+  fi
+  echo "Info: Docker Reverse Replication finished"
+fi
+
+# LXC replication task
+if [ "${LXC_REPLICATION}"  == "enabled" ]; then
+  # Get LXC config from host
+  echo "Info: Starting LXC Replication"
+  LXC_SETTINGS="$(cat /boot/config/plugins/lxc/plugin.cfg)"
+  LXC_BDEVTYPE="$(echo "${LXC_SETTINGS}" | grep 'BDEVTYPE' | cut -d '=' -f2 | sed 's/\"//g')"
+  LXC_PATH="$(cat /boot/config/plugins/lxc/lxc.conf | grep 'lxcpath' | cut -d '=' -f2 | sed 's/\"//g')"
+  LXC_PATH_MASTER="$(ssh ${SSH_PORT} -i ${SSH_CERT} root@${HOST} "cat /boot/config/plugins/lxc/lxc.conf | grep 'lxcpath' | cut -d '=' -f2 | sed 's/\\\"//g'" 2>/dev/null)"
+  # Exit LXC replication if backing storage type is not btrfs nor zfs
+  if [[ "${LXC_BDEVTYPE}" != "btrfs" && "${LXC_BDEVTYPE}" != "zfs" ]]; then
+    echo "Error: Only BTRFS and ZFS as Backing Storage Type are supported! LXC Replication failed"
+    return
+  fi
+  mkdir -p ${TMP_PATH}/lxc
+  # Determine transfer type
+  if [ "${TRANSFER_TYPE}" == "ssh" ]; then
+    # Create necessary directories on remote host and transfer replication configuration
+    ssh ${SSH_PORT} -i ${SSH_CERT} root@${HOST} "mkdir -p ${REMOTE_TMP_PATH}/lxc" > /dev/null 2>&1
+    # Get containers and replicate them one by one
+    LXC_REPLICATION_JSON="$(cat /boot/config/plugins/unraid-replication/replication_cfg/lxc.json | jq -r '.[]')"
+    CONTAINERS="$(cat /boot/config/plugins/unraid-replication/replication_cfg/lxc.json | jq -r '.[].NAME')"
+    if [[ -z "${CONTAINERS}" || "${CONTAINERS}" == "null" ]]; then
+      echo "Error: No Docker containers to replicate specified"
+      return
+    fi
+    IFS=$'\n'
+    for container in $CONTAINERS; do
+      if ! lxc-info ${container} >/dev/null 2>&1 ; then
+        echo "Error: LXC container: ${container} not found, skipping!"
+        continue
+      fi
+      # Determine backing storage type
+      # Check if Autostart from container is enabled and wait for it to come online
+      CONTAINER_AUTOSTART="$(ssh ${SSH_PORT} -i ${SSH_CERT} root@${HOST} "cat ${LXC_PATH_MASTER}/${container}/config | grep \"^lxc.start.auto\" | cut -d '=' -f2 | sed 's/\\\"//g'" 2>/dev/null)"
+      if [ "${CONTAINER_AUTOSTART}" == "1" ] ; then 
+        echo "Info: Autostart form LXC Container: ${container} enabled, waiting for start from Container"
+        while true; do
+          CONTAINER_STATE="$(ssh ${SSH_PORT} -i ${SSH_CERT} root@${HOST} "lxc-info --state ${container}" 2>/dev/null)"
+          if grep -q "RUNNING" <<<${CONTAINER_STATE} ; then
+            echo "Info: LXC Container: ${container} started, stopping Container"
+            ssh ${SSH_PORT} -i ${SSH_CERT} root@${HOST} "lxc-stop ${container}" 2>/dev/null
+            break
+          fi
+          echo "Info: LXC Container: ${container} not running, checking again in 10 seconds"
+          sleep 10
+        done
+      fi
+      # Make sure container is stopped on Master machine (which can happen when Docker not sucessfull stopping on Master machine)
+      ssh ${SSH_PORT} -i ${SSH_CERT} root@${HOST} "lxc-stop ${container}" > /dev/null 2>&1
+      echo "Info: Reverse Replication from container ${container} starting"
+      if [ "${LXC_BDEVTYPE}" == "btrfs" ]; then
+        # Create snapshot directory, create snapshot from container, copy over continer
+        # config/icon, create tar archive and copy it to remote host
+        mkdir -p ${LXC_PATH}/.ur_replication/${container}
+        lxc-stop ${container}
+        btrfs sub snap ${LXC_PATH}/${container}/rootfs ${LXC_PATH}/.ur_replication/${container}
+        cp ${LXC_PATH}/${container}/config ${LXC_PATH}/.ur_replication/${container}/config
+        if [ -f ${LXC_PATH}/custom-icons/${container}.png ]; then
+          cp ${LXC_PATH}/custom-icons/${container}.png ${LXC_PATH}/.ur_replication/${container}
+        fi
+        cd ${LXC_PATH}/.ur_replication/${container}
+        tar --remove-files -cf ${LXC_PATH}/.ur_replication/${container}.tar . 2>/dev/null
+        scp ${SCP_PORT} -i ${SSH_CERT} ${LXC_PATH}/.ur_replication/${container}.tar root@${HOST}:${TMP_PATH}/lxc/${container}.tar 2>/dev/null
+      elif [ "${LXC_BDEVTYPE}" == "zfs" ]; then
+        echo "Info: ZFS backing storage type is not implemented yet"
+        return
+      fi
+      # Remove temporary files from host and start replication task on remote host
+      rm -rf ${LXC_PATH}/.ur_replication/${container}.tar ${REMOTE_TMP_PATH}/${container} ${LXC_PATH}/.ur_replication/${container}
+      ssh ${SSH_PORT} -i ${SSH_CERT} root@${HOST} "/usr/local/emhttp/plugins/unraid-replication/scripts/client_sync_lxc $container" 2>/dev/null
+      echo "Info: Reverse Replication from container: ${container} finished"
+      # Start container if it was running before on host
+      if grep -q "RUNNING" <<<${CONTAINER_STATE} ; then
+        echo "Info: Starting container: ${container} on Master machine"
+        ssh ${SSH_PORT} -i ${SSH_CERT} root@${HOST} "lxc-start ${container}" 2>/dev/null
+      fi
+      unset CONTAINER_STATE
+    done
+  fi
+  echo "Info: LXC Reverse Replication finished"
+fi
+
+# VM replication task
+if [ "${VM_REPLICATION}" == "enabled" ]; then
+  echo "Info: VM Replication TBD"
+fi
+
+echo "Info: Reverse-Replication finished"
+
+# Remove reverse replication files
+rm -f ${TMP_PATH}/reverseReplication
+ssh ${SSH_PORT} -i ${SSH_CERT} root@${HOST} "rm -f ${TMP_PATH}/clientReplication" > /dev/null 2>&1

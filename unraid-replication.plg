@@ -1,0 +1,137 @@
+<?xml version='1.0' standalone='yes'?>
+<!DOCTYPE PLUGIN [
+  <!ENTITY name            "unraid-replication">
+  <!ENTITY author          "ich777">
+  <!ENTITY version         "2024.06.04">
+  <!ENTITY md5             "a5b923c2f2d20875383ea7b0ba7a92c4">
+  <!ENTITY keepalived_v    "2.3.1">
+  <!ENTITY keepalived_md5  "58880213ff2ff9021660a6a3022c66d2">
+  <!ENTITY launch          "Settings/unraid-replication">
+  <!ENTITY gitURL          "https://github.com/&author;/unraid-&name;/raw/master">
+  <!ENTITY pluginURL       "&gitURL;/&name;.plg">
+  <!ENTITY plugin          "/boot/config/plugins/&name;">
+  <!ENTITY emhttp          "/usr/local/emhttp/plugins/&name;">
+  <!ENTITY packages        "/boot/config/plugins/&name;/packages">
+]>
+
+<PLUGIN  name="&name;" author="&author;" version="&version;" launch="&launch;" pluginURL="&pluginURL;" min="6.13.0-beta.2" support="https://forums.unraid.net/topic/167503-plugin-unraid-replication/" icon="clone">
+
+<CHANGES>
+
+###2024.06.04
+- Initial (experimental) release
+- PLEASE USE WITH CAUTION (make sure to backup your containers and corresponding data)
+
+</CHANGES>
+
+<FILE Run="/bin/bash">
+<INLINE>
+rm -f $(ls &plugin;/&name;*.txz 2>/dev/null|grep -v '&version;')
+</INLINE>
+</FILE>
+
+<FILE Name="&plugin;/&name;-&version;.txz" Run="upgradepkg --install-new">
+<URL>&gitURL;/packages/&name;-&version;.txz</URL>
+<MD5>&md5;</MD5>
+</FILE>
+
+<FILE Run="/bin/bash">
+<INLINE>
+rm -f $(ls &plugin;/keepalived-*-x86_64-1.txz 2>/dev/null|grep -v '&keepalived_v;')
+</INLINE>
+</FILE>
+
+<FILE Name="&plugin;/keepalived-&keepalived_v;-x86_64-1.txz" Run="upgradepkg --install-new">
+<URL>&gitURL;/packages/keepalived-&keepalived_v;-x86_64-1.txz</URL>
+<MD5>&keepalived_md5;</MD5>
+</FILE>
+
+<FILE Name="&emhttp;/README.md">
+<INLINE>
+**Unraid Replication**  
+  
+This plugin allows you to replicate your main applications (Docker/LXC containers and choosen directories) to a second, unRAID based, Backup machine.  
+With the inclusion of keepalived you can also create a virtual IP for your Main and Backup machine where the backup machine can automatically run the replicated containers.  
+For more information visit the Support Thread on the forums.  
+  
+ATTENTION: This is a experimental release and it is recommended to use this tool with caution (make sure that you create a backup from your containers and data that is synced). If you encounter a bug please report it in the support thread.
+</INLINE>
+</FILE>
+
+<FILE Run="/bin/bash">
+<INLINE>
+
+# Create settings.cfg file
+if [ ! -f &plugin;/settings.cfg ]; then
+  echo "INSTANCE_TYPE=
+HOST=
+TRANSFER_TYPE=ssh
+DOCKER_REPLICATION=
+LXC_REPLICATION=
+VM_REPLICATION=
+CONNECTION_TEST=
+SYSLOG_LOGGING=1
+KEEPALIVED=disabled" &gt; &plugin;/settings.cfg
+fi
+
+# Create replication_cfg directory
+if [ ! -d &plugin;/replication_cfg ]; then
+  mkdir -p &plugin;/replication_cfg
+fi
+
+# Link host_sync for system wide access to command: unraid-replication
+ln -s &emhttp;/scripts/host_sync /usr/bin/unraid-replication
+
+# Create certificate directory
+if [ ! -d &plugin;/cert ]; then
+  mkdir -p &plugin;/cert
+fi
+
+# Create necessary persistent directories for keepalived
+if [ ! -d &plugin;/keepalived/scripts ]; then
+  mkdir -p &plugin;/keepalived/scripts
+fi
+
+# Copy default keepalived config and scripts if not found
+if [ ! -f &plugin;/keepalived/keepalived.conf ]; then
+  cp &emhttp;/keepalived/keepalived.conf &plugin;/keepalived/keepalived.conf
+fi
+if [ ! -f &plugin;/keepalived/scripts/master.sh ]; then
+  cp &emhttp;/keepalived/scripts/master.sh &plugin;/keepalived/scripts/master.sh
+fi
+if [ ! -f &plugin;/keepalived/scripts/backup.sh ]; then
+  cp &emhttp;/keepalived/scripts/backup.sh &plugin;/keepalived/scripts/backup.sh
+fi
+if [ ! -f &plugin;/keepalived/scripts/fault.sh ]; then
+  cp &emhttp;/keepalived/scripts/fault.sh &plugin;/keepalived/scripts/fault.sh
+fi
+
+# Get all keepalived configuration files and linke them to /etc/keepalived/
+KEEPALIVED_FILES="$(ls -1 &plugin;/keepalived/)"
+for keepalived_files in ${KEEPALIVED_FILES}; do
+  ln -s &plugin;/keepalived/${keepalived_files%/*} /etc/keepalived/${keepalived_files%/*}
+done
+
+</INLINE>
+</FILE>
+
+<FILE Run="/bin/bash" Method="remove">
+<INLINE>
+
+echo "-------------------------------------"
+echo "---Uninstalling Unraid Replication---"
+echo "-------------------------------------"
+kill $(pidof keepalived) 2&gt;/dev/null
+removepkg &name;-&version; &gt;/dev/null 2&gt;&1
+removepkg keepalived-&keepalived_v;-x86_64-1 &gt;/dev/null 2&gt;&1
+rm -rf &emhttp;
+rm -rf &plugin;
+echo
+echo "--------------------------------------------"
+echo "---Unraid Replication plugin uninstalled!---"
+echo "--------------------------------------------"
+echo
+
+</INLINE>
+</FILE>
+</PLUGIN>

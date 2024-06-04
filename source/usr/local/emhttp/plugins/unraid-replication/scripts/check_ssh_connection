@@ -1,0 +1,37 @@
+#!/bin/bash
+# Construct HOST string
+if [ ! -z "${1}" ]; then
+  HOST="${1}"
+  if [[ "${HOST}" == *:* ]]; then
+    HOST="${HOST%%:*}"
+    SSH_PORT=" -p ${HOST#*:}"
+  else
+    SSH_PORT=""
+  fi
+else
+  echo "Error: No IP at connection test specified"
+  exit 1
+fi
+
+if [ "${2}" == "reverse" ]; then
+  SSH_CERT="/boot/config/plugins/unraid-replication/cert/reverse/client"
+else
+  SSH_CERT="/boot/config/plugins/unraid-replication/cert/replication"
+fi
+
+# Get remote host IP/Name from config and try to connect to remote host, option
+# StrictHostKeyChecking=no necessary to make sure known_hosts file is updated
+ssh ${SSH_PORT} -i ${SSH_CERT} -o StrictHostKeyChecking=no root@${HOST} "exit" > /dev/null 2>&1
+EXIT_STATUS=$?
+
+# Display success message or exit status from SSH
+if [ "${EXIT_STATUS}" != 0 ]; then
+  echo "Error: Can't connect to remote host: ${HOST}"
+  echo "Error: SSH Exit Status: ${EXIT_STATUS}"
+  sed -i "/^CONNECTION_TEST=\"*/c\CONNECTION_TEST=failed" /boot/config/plugins/unraid-replication/settings.cfg
+  exit 1
+else
+  echo "Info: SSH connection working properly!"
+  sed -i "/^CONNECTION_TEST=\"*/c\CONNECTION_TEST=success" /boot/config/plugins/unraid-replication/settings.cfg
+  exit 0
+fi

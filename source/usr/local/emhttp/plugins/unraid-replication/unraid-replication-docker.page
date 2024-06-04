@@ -1,0 +1,160 @@
+Menu="unraid-replication:3"
+Title="Docker"
+Tag="icon-docker f32"
+Cond="parse_ini_file('/boot/config/plugins/unraid-replication/settings.cfg')['INSTANCE_TYPE'] == 'host' && parse_ini_file('/boot/config/plugins/unraid-replication/settings.cfg')['DOCKER_REPLICATION'] == 'enabled'"
+---
+<script>
+if ( window.history.replaceState ) {
+  window.history.replaceState( null, null, window.location.href );
+}
+</script>
+
+<?php
+// Get variables
+$docker_ps = trim(shell_exec('docker ps -a --format "{{.Names}}"'));
+$docker_containers = explode("\n", $docker_ps);
+$docker_autostart = file_get_contents('/var/lib/docker/unraid-autostart');
+$docker_order = parse_ini_file('/boot/config/plugins/dockerMan/userprefs.cfg');
+$replication_containers = array();
+$replication = json_decode(file_get_contents('/boot/config/plugins/unraid-replication/replication_cfg/docker.json'), true);
+foreach ($replication as $item) {
+  $replication_containers[$item['NAME']] = array(
+    'NAME' => $item['NAME'],
+    'STOP_CONTAINER' => $item['STOP_CONTAINER'],
+    'PATH' => $item['PATHS'],
+    'AUTOSTART' => $item['AUTOSTART']
+  );
+}
+
+// Display message no containers found if none found
+if(empty($docker_ps)) {
+  echo '<p>&nbsp;</p><h2 style="text-align: center;"><strong><span style="color: #ff0000;">No Docker containers found!</span><br /></strong></h1>';
+} else {
+  echo '<form method="post">';
+  echo '<div style="display: flex; flex-wrap: wrap; justify-content: center;">';
+  // Sort containers like on the Docker page
+  if(!empty($docker_order)) {
+    usort($docker_containers, function ($a, $b) use ($docker_order) {
+      $pos_a = array_search($a, $docker_order);
+      $pos_b = array_search($b, $docker_order);
+      return $pos_a - $pos_b;
+    });
+  }
+  // Loop through containers
+  foreach ($docker_containers as $docker_container) {
+    // Make sure to only show container which are created by Unraid
+    $xml = simplexml_load_file('/boot/config/plugins/dockerMan/templates-user/my-' . $docker_container . '.xml');
+    if (empty($xml->Name)) {
+      continue;
+    }
+    // Get icons vrom containers
+    $icon = '/state/plugins/dynamix.docker.manager/images/' . $xml->Name . '-icon.png';
+    // Get container stop on Replication
+    if (isset($replication_containers[(string)$xml->Name]) && $replication_containers[(string)$xml->Name]['STOP_CONTAINER'] !== false) {
+      $stop_container = 'checked';
+    } else {
+      $stop_container = '';
+    }
+    // Get container Client Autostart
+    if (isset($replication_containers[(string)$xml->Name]) && $replication_containers[(string)$xml->Name]['AUTOSTART'] !== false) {
+      $client_autostart = 'checked';
+    } else {
+      $client_autostart = '';
+    }
+    // Get container Network
+    if((string)$xml->Network === "none") {
+      preg_match('/--net=([^\s]+)/', (string)$xml->ExtraParams, $match);
+      $network = $match[1];
+    } else {
+      $network = $xml->Network;
+    }
+    // Get container paths
+    $paths = [];
+    $paths_lines = '';
+    foreach ($xml->Config as $config) {
+      if ($config instanceof SimpleXMLElement) {
+        if (isset($config['Type']) && (string) $config['Type'] === 'Path') {
+        $checked = '';
+        if (isset($replication_containers[(string)$xml->Name]['PATH'])) {
+          $checked = in_array((string)$config[0], $replication_containers[(string)$xml->Name]['PATH']) ? ' checked' : '';
+        }
+        $paths_lines .= '<tr title="Replicate: ' . (string)$config[0] . '"><td><input type="checkbox" name="' . $xml->Name . '[PATH][]" value="' . (string)$config[0] . '"' . $checked . '></td><td>' . (string)$config[0] . '</td></tr>';
+        $paths[] = (string) $config[0];
+        }
+      }
+    }
+    echo '<div style="min-width: 300px; min-height: 100px; border: 1px solid #ccc; margin: 5px; box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.1);">';
+    echo '<img src="' . (file_exists("/usr/local/emhttp" . $icon) ? $icon : "/plugins/dynamix.docker.manager/images/question.png") . '" class="img" width="30" height="30">';
+    echo '<b style="color: #ff5e4d; font-size: larger;">' . $xml->Name . '</b>';
+    echo '<div style="padding: 20px;">';
+    echo '<span style="padding: 10px;"><table style="width: 80%; text-align: left; line-height: 0.5;">';
+    echo '<input type="text" name="' . $xml->Name . '[NAME]" value="' . $xml->Name . '" hidden>';
+    echo '<tr title="Enable/Disable Replication from Docker Container: ' . $xml->Name . '"><td>Replication:</td><td><input type="checkbox" name="' . $xml->Name . '[REPLICATION]"' . (array_key_exists((string)$xml->Name, $replication_containers) ? ' checked' : '') . '></td></tr>';
+    echo '<tr title="Stop Docker Container while replicating (recommended)"><td>Stop Container:</td><td><input type="checkbox" name="' . $xml->Name . '[STOP_CONTAINER]" ' . $stop_container . '></td></tr>';
+    echo '<tr><td>Repository:</td><td>' . $xml->Repository . '</td></tr>';
+    echo '<input type="text" name="' . $xml->Name . '[REPOSITORY]" value="' . $xml->Repository . '" hidden>';
+    echo '<tr><td>Host Autostart:</td><td><input type="checkbox" ' . (strpos($docker_autostart, $xml->Name) !== false ? 'checked' : '') . ' disabled></td></tr>';
+    echo '<tr title="Enable Autostart on Client machine (applies if keepalived and Autostart from containers on Client is enabled)"><td>Client Autostart:</td><td><input type="checkbox" name="' . $xml->Name . '[AUTOSTART]" ' . $client_autostart . '></td></tr>';
+    echo '<tr><td>Network:</td><td>' . $network . '</td></tr>';
+    echo '<input type="text" name="' . $xml->Name . '[NETWORK]" value="' . $network . '" hidden>';
+    if (!empty($paths_lines)) {
+      echo '<tr><td colspan="2"><hr></td></tr>';
+      echo '<tr title="Container paths that you want to replicate"><td>Container Paths:</td><td>';
+      echo $paths_lines;
+    }
+    $paths = implode(',', $paths);
+    echo '<input type="hidden" name="selectedPaths" id="selectedPaths" value="">';
+    echo '</tr>';
+    echo '</table></span>';
+    echo '</div>';
+    echo '</div>';
+  }
+  echo '</div>';
+  echo '<button type="submit" name="apply_docker">Update</button></form>';
+} ?>
+
+<script>
+document.querySelector('form').addEventListener('submit', function() {
+  var containers = <?php echo json_encode($containers); ?>; // $containers sollte ein Array mit den Namen aller Ihrer Container sein
+  containers.forEach(function(container) {
+    var selectedPaths = Array.from(document.querySelectorAll('input[name="' + container + '[PATH][]"]:checked'))
+      .map(function(checkbox) {
+        return checkbox.value;
+      });
+   document.getElementById(container + 'SelectedPaths').value = selectedPaths.join(',');
+  });
+});
+</script>
+
+<?php
+if (isset($_POST['apply_docker'])) {
+  $data = [];
+  foreach ($_POST as $containerName => $containerData) {
+    if (!is_array($containerData)) {
+      continue;
+    }
+    if (isset($containerData['REPLICATION']) && $containerData['REPLICATION'] === 'on') {
+      $container = [
+        'NAME' => $containerData['NAME'],
+        'STOP_CONTAINER' => false,
+        'REPOSITORY' => $containerData['REPOSITORY'],
+        'NETWORK' => $containerData['NETWORK'],
+        'AUTOSTART' => false,
+        'PATHS' => []
+         ];
+      if (!empty($containerData['STOP_CONTAINER'])) {
+        $container['STOP_CONTAINER'] = $containerData['STOP_CONTAINER'];
+      }
+      if (!empty($containerData['AUTOSTART'])) {
+        $container['AUTOSTART'] = $containerData['AUTOSTART'];
+      }
+      if (!empty($containerData['PATH'])) {
+        $container['PATHS'] = $containerData['PATH'];
+      }
+      $data[] = $container;
+    }
+  }
+  file_put_contents('/boot/config/plugins/unraid-replication/replication_cfg/docker.json', json_encode($data, JSON_PRETTY_PRINT));
+  echo '<script>parent.window.location.reload();</script>';
+}?>
+

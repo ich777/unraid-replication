@@ -1,0 +1,21 @@
+#!/bin/bash
+# Sleep one second to make sure all files are written
+sleep 1
+
+# Get instance type
+INSTANCE_TYPE="$(cat /boot/config/plugins/unraid-replication/settings.cfg | grep 'INSTANCE_TYPE' | cut -d '=' -f2 | sed 's/\"//g')"
+
+# Remove keys depending on instance type if instance type is changed for reasons
+if [ "${INSTANCE_TYPE}" == "host" ]; then
+  AUTHORIZED_KEYS="$(cat /root/.ssh/authorized_keys | grep -v "uR_replication")"
+  echo "${AUTHORIZED_KEYS}" > /root/.ssh/authorized_keys
+  if [[ -f "/boot/config/plugins/unraid-replication/cert/replication.pub" && ! -f "/boot/config/plugins/unraid-replication/cert/replication" ]]; then
+    rm -f /boot/config/plugins/unraid-replication/cert/*
+  fi
+elif [ "${INSTANCE_TYPE}" == "client" ]; then
+  if [ -f /boot/config/plugins/unraid-replication/cert/replication ]; then
+    rm -f /boot/config/plugins/unraid-replication/cert/*
+  fi
+  sed -i "/^CONNECTION_TEST=\"*/c\CONNECTION_TEST=" /boot/config/plugins/unraid-replication/settings.cfg
+  sed -i "/^HOST=\"*/c\HOST=" /boot/config/plugins/unraid-replication/settings.cfg
+fi

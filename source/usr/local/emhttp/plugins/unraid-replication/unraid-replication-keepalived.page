@@ -1,0 +1,75 @@
+Menu="unraid-replication:2"
+Title="keepalived"
+Tag="fa-circle-o-notch f32"
+Cond="parse_ini_file('/boot/config/plugins/unraid-replication/settings.cfg')['KEEPALIVED'] == 'enabled'"
+---
+<?php
+$replication_settings = parse_ini_file('/boot/config/plugins/unraid-replication/settings.cfg');
+$keepalived_conf = htmlspecialchars(file_get_contents('/boot/config/plugins/unraid-replication/keepalived/keepalived.conf'));
+$host_conf_example = htmlspecialchars(file_get_contents('/usr/local/emhttp/plugins/unraid-replication/examples/keepalived-host.conf'));
+$backup_conf_example = htmlspecialchars(file_get_contents('/usr/local/emhttp/plugins/unraid-replication/examples/keepalived-backup.conf'));
+?>
+
+<script>
+if ( window.history.replaceState ) {
+  window.history.replaceState( null, null, window.location.href );
+}
+</script>
+
+<style>
+.spoiler[open] summary::after {
+  content: attr(data-open);
+}
+.spoiler:not([open]) summary::after {
+  content: attr(data-close);
+}
+</style>
+
+<p style="text-align: center;">keepalived Configuration:</p>
+<div style="display: flex; justify-content: center; align-items: center;">
+  <form method="post">
+    <textarea style="width: 600px; height: 500px; margin: 0 auto; padding: 10px; border: 1px solid #000;" name="keepalivedConfData"><?php echo $keepalived_conf; ?></textarea><br>
+    <input type="submit" name="resetConf" value="Reset">
+    <input type="submit" name="keepalivedConf" value="Update">
+  </form>
+  <br/>
+</div>
+
+<hr/>
+
+<div style="display: flex; flex-wrap: wrap; justify-content: center;">
+  <?php if($replication_settings['INSTANCE_TYPE'] === 'host') : ?>
+    <div style="min-width: 300px; min-height: 100px; margin: 5px;">
+      <details class="spoiler" close>
+        <summary style="min-width: 675px" data-open="Hide example Host (Master) keepalived.conf" data-close="Show Host (Master) keepalived.conf example"></summary>
+        <textarea style="width: 660px; height: 1020px; margin: 0 auto; padding: 10px; border: 1px solid #000;" readonly><?php echo $host_conf_example; ?></textarea>
+      </details>
+    </div>
+  <?php elseif($replication_settings['INSTANCE_TYPE'] === 'client') : ?>
+    <div style="min-width: 300px; min-height: 100px; margin: 5px;">
+      <details class="spoiler" close>
+        <summary style="min-width: 675px" data-open="Hide example Client (Backup) keepalived.conf" data-close="Show Client (Backup) keepalived.conf example"></summary>
+        <textarea style="width: 660px; height: 1020px; margin: 0 auto; padding: 10px; border: 1px solid #000;" readonly><?php echo $backup_conf_example; ?></textarea>
+      </details>
+    </div>
+  <?php endif; ?>
+</div>
+
+<?php
+if (isset($_POST['resetConf'])) {
+  echo '<script>parent.window.location.reload();</script>';
+}
+
+if (isset($_POST['keepalivedConf'])) {
+  $newContent = $_POST['keepalivedConfData'];
+  file_put_contents('/boot/config/plugins/unraid-replication/keepalived/keepalived.conf', $newContent);
+  if(shell_exec('pidof keepalived')) {
+    shell_exec('kill $(pidof keepalived) && tail --pid=$(pidof keepalived) -f 2>/dev/null');
+    sleep(1);
+    shell_exec('keepalived');
+  } else {
+    shell_exec('keepalived');
+  }
+  echo '<script>parent.window.location.reload();</script>';
+}
+?>

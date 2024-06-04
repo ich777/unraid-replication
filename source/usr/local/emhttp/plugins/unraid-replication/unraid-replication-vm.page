@@ -1,0 +1,6 @@
+Menu="unraid-replication:5"
+Title="VM"
+Tag="icon-virtualization f32"
+Cond="parse_ini_file('/boot/config/plugins/unraid-replication/settings.cfg')['INSTANCE_TYPE'] == 'host' && parse_ini_file('/boot/config/plugins/unraid-replication/settings.cfg')['VM_REPLICATION'] == 'enabled'"
+---
+<text style="font-size: +200%">Not done yet... &#x1F624;</text>

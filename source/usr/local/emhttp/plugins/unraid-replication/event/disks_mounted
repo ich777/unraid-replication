@@ -1,0 +1,13 @@
+#!/bin/bash
+KEEPALIVED="$(cat /boot/config/plugins/unraid-replication/settings.cfg | grep 'KEEPALIVED' | cut -d '=' -f2 | sed 's/\"//g')"
+if [ "${KEEPALIVED}" == "enabled" ]; then
+  logger "unraid-replication: Info: Starting keepalived"
+  if pidof keepalived 2>/dev/null ; then
+    kill $(pidof keepalived)
+    tail --pid=$(pidof keepalived) -f 2>/dev/null
+    sleep 1
+    keepalived
+  else
+    keepalived
+  fi
+fi

@@ -1,0 +1,26 @@
+#!/bin/bash
+# Wait one second to make sure file is actually written
+sleep 1
+
+# Get Private Key from plugin directory
+PUB_KEY="$(cat /boot/config/plugins/unraid-replication/cert/reverse/client.pub)"
+HOSTNAME="$(echo "${PUB_KEY}" | awk '{print $NF}' | sed "s/^[^@]*/uR_replication/")"
+NEW_KEY="${PUB_KEY% *} ${HOSTNAME}"
+
+# Check for a existing public key from Unraid-Replication plugin and replace it
+# if found, otherwise inject it to authorized_keys file
+if [ -f /root/.ssh/authorized_keys ]; then
+  AUTHORIZED_KEYS="$(cat /root/.ssh/authorized_keys | grep -v "uR_replication")"
+  echo "${AUTHORIZED_KEYS}" > /root/.ssh/authorized_keys
+  echo "${NEW_KEY}" >> /root/.ssh/authorized_keys
+else
+  echo "${NEW_KEY}" > /root/.ssh/authorized_keys
+fi
+
+# Create known_hosts file if not exists
+if [ ! -f /root/.ssh/known_hosts ]; then
+  touch /root/.ssh/known_hosts
+fi
+
+# Remove empty newlines from authorized_keys file
+echo "$(cat /root/.ssh/authorized_keys | sed '/^$/d')" > /root/.ssh/authorized_keys

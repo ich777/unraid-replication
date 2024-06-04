@@ -1,0 +1,92 @@
+#!/bin/bash
+# Exit script if no container name is passed over
+if [ -z $1 ]; then
+  echo "Error: No container name specified"
+  exit 1
+else
+  # Get variables and read LXC config
+  TMP_PATH="$(cat /boot/config/plugins/unraid-replication/settings.cfg | grep 'TMP_PATH' | cut -d '=' -f2 | sed 's/\"//g')"
+  if [ -z "${TMP_PATH}" ]; then
+    TMP_PATH="/tmp/unraid-replication"
+  fi
+  if [ -f "${TMP_PATH}/clientReplication" ]; then
+    REV_REPLICATION="running"
+  else
+    REV_REPLICATION=""
+  fi
+  LXC_SETTINGS="$(cat /boot/config/plugins/lxc/plugin.cfg)"
+  LXC_BDEVTYPE="$(echo "${LXC_SETTINGS}" | grep 'BDEVTYPE' | cut -d '=' -f2 | sed 's/\"//g')"
+  LXC_PATH="$(cat /boot/config/plugins/lxc/lxc.conf | grep 'lxcpath' | cut -d '=' -f2 | sed 's/\"//g')"
+  CONTAINER="$1"
+  # Check if LXC is enabled
+  if [ "$(echo "${LXC_SETTINGS}" | grep '^SERVICE' | cut -d '=' -f2 | sed 's/\"//g')" != "enabled" ]; then
+    echo "Error: LXC not enabled, skipping LXC container: ${CONTAINER}"
+    rm -f ${TMP_PATH}/lxc/${CONTAINER}.tar
+    exit 1
+  fi
+
+  # Exit LXC replication if backing storage type is not btrfs nor zfs
+  if [[ "${LXC_BDEVTYPE}" != "btrfs" && "${LXC_BDEVTYPE}" != "zfs" ]]; then
+    echo "Error: Only BTRFS and ZFS as Backing Storage Type are supported! LXC Replication on remote host failed"
+    exit 1
+  fi
+
+  # Stop/kill, unmount rootfs/snaphots (including workaround for NixOS container:
+  # remove immutable attribute), destroy container and remove container directory
+  echo "Info: Remote host replication task for LXC container: ${CONTAINER} starting"
+  lxc-stop -k -n ${CONTAINER} 2>/dev/null
+  umount ${LXC_PATH}/${CONTAINER}/rootfs > /dev/null 2>&1
+  if [ -d ${LXC_PATH}/${CONTAINER}/rootfs/var/empty ]; then
+    find ${LXC_PATH}/${CONTAINER}/rootfs/var/empty -exec chattr -i {} \;
+  fi
+  if [ -d ${LXC_PATH}/${CONTAINER}/snaps ]; then
+    SNAPSHOTS="$(ls -1 ${LXC_PATH}/${CONTAINER}/snaps/)"
+    IFS=$'\n'
+    for snapshot in $SNAPSHOTS; do
+      umount ${LXC_PATH}/${CONTAINER}/snaps/${snapshot}rootfs > /dev/null 2>&1
+      if [ -d ${LXC_PATH}/${CONTAINER}/snaps/${snapshot}rootfs/var/empty ]; then
+        find ${LXC_PATH}/${CONTAINER}/snaps/${snapshot}rootfs/var/empty -exec chattr -i {} \;
+      fi
+    done
+  fi
+  lxc-destroy -n ${CONTAINER} 2>/dev/null
+  rm -rf ${LXC_PATH}/${CONTAINER} 2>/dev/null
+
+  # Determine backing storage type  
+  if [ "${LXC_BDEVTYPE}" == "btrfs" ]; then
+    # Create new directory, create BTRFS subvolume and extract container archive
+    mkdir -p ${LXC_PATH}/${CONTAINER}
+    btrfs subvolume create ${LXC_PATH}/${CONTAINER}/rootfs
+    tar -xf ${TMP_PATH}/lxc/${CONTAINER}.tar -C ${LXC_PATH}/${CONTAINER}
+    if [ -f ${LXC_PATH}/${CONTAINER}/${CONTAINER}.png ]; then
+      if [ ! -d ${LXC_PATH}/${CONTAINER}/custom-icons ]; then
+        mkdir -p ${LXC_PATH}/custom-icons
+      fi
+      mv ${LXC_PATH}/${CONTAINER}/${CONTAINER}.png ${LXC_PATH}/custom-icons/${CONTAINER}.png
+    fi
+    # Disabe autostart from container
+    if [ ! -z "${REV_REPLICATION}" ]; then
+      sed -i '/lxc.start.auto/ s/^#//' ${LXC_PATH}/${CONTAINER}/config
+    else
+      if [ "$(grep "^lxc.start.auto" ${LXC_PATH}/${CONTAINER}/config | cut -d '=' -f2 | sed 's/\"//g')" == "1" ] ; then
+        sed -i '/^lxc\.start\.auto/s/.*/#lxc\.start\.auto=1/' ${LXC_PATH}/${CONTAINER}/config
+      fi
+    fi
+  elif [ "${LXC_BDEVTYPE}" == "zfs" ]; then
+    echo "Info: ZFS backing storage type is not implemented yet"
+  fi
+
+  # Remove container image archive
+  rm -f ${TMP_PATH}/lxc/${CONTAINER}.tar
+
+  echo "Info: Remote host replication task for LXC container: ${CONTAINER} finished"
+
+  # Start container if reverse replication is enabled
+  if [ ! -z "${REV_REPLICATION}" ]; then
+    CONTAINER_AUTOSTART="$(cat /boot/config/plugins/unraid-replication/replication_cfg/lxc.json | jq -r --arg name "${CONTAINER}" '.[] | select(.NAME == $name) | .AUTOSTART')"
+    if [ "${CONTAINER_AUTOSTART}" == "on" ]; then
+      echo "Starting container: ${CONTAINER}"
+      docker container start ${CONTAINER}
+    fi
+  fi
+fi

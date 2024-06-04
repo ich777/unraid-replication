@@ -1,0 +1,151 @@
+#!/bin/bash
+# Exit script if no container name is passed over
+if [ -z ${1} ]; then
+  echo "Error: No container name specified"
+  exit 1
+else
+  # Get variables and read container config json
+  TMP_PATH="$(cat /boot/config/plugins/unraid-replication/settings.cfg | grep 'TMP_PATH' | cut -d '=' -f2 | sed 's/\"//g')"
+  if [ -z "${TMP_PATH}" ]; then
+    TMP_PATH="/tmp/unraid-replication"
+  fi
+  if [ -f "${TMP_PATH}/clientReplication" ]; then
+    REV_REPLICATION="running"
+  else
+    REV_REPLICATION=""
+  fi
+  DOCKER_SETTINGS="$(cat /boot/config/docker.cfg)"
+  CONTAINER="$1"
+  # Check if Docker is enabled
+  if [ "$(echo "${DOCKER_SETTINGS}" | grep '^DOCKER_ENABLED' | cut -d '=' -f2 | sed 's/\"//g')" != "yes" ]; then
+    echo "Error: Docker not enabled, skipping Docker container: ${CONTAINER}"
+    rm -f ${TMP_PATH}/docker/ur_replication_${CONTAINER}.tar ${TMP_PATH}/docker/${CONTAINER}.json
+    exit 1
+  fi
+  CONTAINER_CONFIG="$(cat /boot/config/plugins/unraid-replication/replication_cfg/docker.json | jq -r --arg name "${CONTAINER}" '.[] | select(.NAME == $name)')"
+  CONTAINER_JSON="$(cat ${TMP_PATH}/docker/${CONTAINER}.json)"
+  REPOSITORY="$(echo "${CONTAINER_CONFIG}" | jq -r '.REPOSITORY' 2>/dev/null)"
+  NET="$(echo "${CONTAINER_CONFIG}" | jq -r '.NETWORK' 2>/dev/null)"
+  if ! grep -q "^container:" <<<${NET} ; then
+    NET="$(echo "$CONTAINER_JSON" | jq -r '.[].HostConfig.NetworkMode' 2>/dev/null)"
+  fi
+  IPS="$(echo "$CONTAINER_JSON" | jq -r --arg net "${NET}" '.[].NetworkSettings.Networks[$net].IPAMConfig.IPv4Address' 2>/dev/null)"
+  BINDS="$(echo "$CONTAINER_JSON" | jq -r ".[$container].HostConfig.Binds[] | split(\":\") | \"'\(.[0])':'\(.[1])':'\(.[2])'\"" 2>/dev/null)"
+  RESTART="$(echo "$CONTAINER_JSON" | jq -r '.[].HostConfig.RestartPolicy.Name' 2>/dev/null)"
+  ENV_VARS="$(echo "$CONTAINER_JSON" | jq -r '.[].Config.Env[]' 2>/dev/null)"
+  DEVICES="$(echo "$CONTAINER_JSON" | jq -r ".[].HostConfig.Devices | .[] | \"'\(.PathOnHost)':'\(.PathInContainer)'\"" 2>/dev/null)"
+  LABELS="$(echo "$CONTAINER_JSON" | jq -r '.[].Config.Labels | to_entries | .[] | "\(.key)=\(.value)"' 2>/dev/null)"
+  PORTS="$(echo "$CONTAINER_JSON" | jq -r '.[].HostConfig.PortBindings | to_entries[] | "\(.value[0].HostPort):\(.key)"' 2>/dev/null)"
+  CAPS="$(echo "$CONTAINER_JSON" | jq -r '.[].HostConfig.CapAdd[]' 2>/dev/null)"
+  DNS="$(echo "$CONTAINER_JSON" | jq -r '.[].HostConfig.Dns[]' 2>/dev/null)"
+  SYSCTLS="$(echo "$CONTAINER_JSON" | jq -r '.[].HostConfig.Sysctls | to_entries[] | "\(.key)=\(.value)"' 2>/dev/null)"
+
+  # Remove container, import layers, retag image and remove replication image
+  echo "Info: Remote host replication task for Docker container: ${CONTAINER} starting"
+  docker rm ${CONTAINER}
+  docker image rm ${REPOSITORY}
+  docker load -i ${TMP_PATH}/docker/ur_replication_${CONTAINER}.tar
+  docker tag ur_replication_${REPOSITORY} ${REPOSITORY}
+  docker image rm ur_replication_${REPOSITORY}
+
+  # Form docker create command
+  docker_create="docker create \\
+    --name='$CONTAINER'"
+
+  if [[ ! -z ${NET} && ${NET} != "null" ]]; then
+    for net in $NET; do
+      docker_create+=" \\
+    --network='$net'"
+    done
+  fi
+
+  if [[ ! -z ${IPS} && ${IPS} != "null" ]]; then
+    for ip in $IPS; do
+      docker_create+=" \\
+    --ip='$ip'"
+    done
+  fi
+
+  if [[ ! -z ${ENV_VARS} && ${ENV_VARS} != "null" ]]; then
+    for env_var in $ENV_VARS; do
+      docker_create+=" \\
+    -e '$env_var'"
+    done
+  fi
+
+  if [[ ! -z ${LABELS} && ${LABELS} != "null" ]]; then
+    for label in $LABELS; do
+      docker_create+=" \\
+    -l '$label'"
+    done
+  fi
+
+  if [[ ! -z ${PORTS} && ${PORTS} != "null" ]]; then
+    for port in $PORTS; do
+      docker_create+=" \\
+    -p '$port'"
+    done
+  fi
+
+  if [[ ! -z ${BINDS} && ${BINDS} != "null" ]]; then
+    for bind in $BINDS; do
+      docker_create+=" \\
+    -v $bind"
+    done
+  fi
+
+  if [[ ! -z ${RESTART} && ${RESTART} != "null" ]]; then
+    docker_create+=" \\
+    --restart=${RESTART}" 
+  fi
+
+  if [[ ! -z ${DEVICES} && ${DEVICES} != "null" ]]; then
+    for device in $DEVICES; do
+      docker_create+=" \\
+    --device=$device"
+    done
+  fi
+
+  if [[ ! -z ${CAPS} && ${CAPS} != "null" ]]; then
+    for cap in $CAPS; do
+      docker_create+=" \\
+    --cap-add=$cap"
+    done
+  fi
+
+  if [[ ! -z ${DNS} && ${DNS} != "null" ]]; then
+    for dns in $DNS; do
+      docker_create+=" \\
+    --dns=$dns"
+    done
+  fi
+
+  if [[ ! -z ${SYSCTLS} && ${SYSCTLS} != "null" ]]; then
+    for sysctl in $SYSCTLS; do
+      docker_create+=" \\
+    --sysctl $sysctl"
+    done
+  fi
+
+  docker_create+=" \\
+    "
+  
+  docker_create+="'${REPOSITORY}'"
+
+  # Create container
+  echo "Info: Creating new container: ${CONTAINER}"
+  eval "$docker_create"
+
+  # Remove container image archive and container configuration json
+  rm -f ${TMP_PATH}/docker/ur_replication_${CONTAINER}.tar ${TMP_PATH}/docker/${CONTAINER}.json
+  
+  echo "Info: Remote host replication task for Docker container: ${CONTAINER} finished"
+  
+  # Start container if reverse replication is enabled
+  if [ ! -z "${REV_REPLICATION}" ]; then
+    if [ "$(echo ${CONTAINER_CONFIG} | jq -r '.AUTOSTART')" == "on" ]; then
+      echo "Starting container: ${CONTAINER}"
+      docker container start ${CONTAINER}
+    fi
+  fi
+fi

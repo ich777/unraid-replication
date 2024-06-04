@@ -1,0 +1,608 @@
+Menu="unraid-replication:1"
+Title="Unraid Replication"
+Tag="clone"
+---
+<?php
+$vars = parse_ini_file('/usr/local/emhttp/state/var.ini');
+$network = parse_ini_file('/usr/local/emhttp/state/network.ini');
+$replication_settings = parse_ini_file('/boot/config/plugins/unraid-replication/settings.cfg');
+$docker_cfg = parse_ini_file('/boot/config/docker.cfg');
+if(file_exists('/boot/config/plugins/lxc/plugin.cfg')) {
+  $lxc_cfg = parse_ini_file('/boot/config/plugins/lxc/plugin.cfg');
+}
+$domain_cfg = parse_ini_file('/boot/config/domain.cfg');
+if(empty($replication_settings['TEMP_PATH'])) {
+  $tmp_path = '/tmp/unraid-replication';
+} else {
+  $tmp_path = $replication_settings['TEMP_PATH'] . '/unraid-replication';
+}
+?>
+
+<script>
+if ( window.history.replaceState ) {
+  window.history.replaceState( null, null, window.location.href );
+}
+</script>
+
+<form markdown="1" method="post">
+Instance Type:
+: <select name="INSTANCE_TYPE">
+  <?= mk_option($replication_settings['INSTANCE_TYPE'], 'host', 'Host (Master)')?>
+  <?= mk_option($replication_settings['INSTANCE_TYPE'], 'client', 'Client (Backup)')?>
+  </select>
+<input type="submit" name="updateInstanceType" value="Update">
+
+  <blockquote class="inline_help">
+    <p>Select if this machine is the Host or the Client (Backup) side.<br/><b>ATTENTION:</b> You have to install the plugin on both machines so that can work properly!</p>
+  </blockquote>
+</form>
+
+<?php
+if (empty($replication_settings['INSTANCE_TYPE'])) {
+  echo '<p style="text-align: center; font-size: 150%; color: red;"><b>Instance type not set, please set a Instance type first!</b></p>';
+} else {
+  if($replication_settings['INSTANCE_TYPE'] === 'client') {
+    $pubkey = file_get_contents('/boot/config/plugins/unraid-replication/cert/replication.pub');
+    if (!empty($pubkey)) {
+      echo '<p style="text-align: center;">Public Key:';
+      echo '<pre style="width: 600px; margin: 0 auto; padding: 10px; border: 1px solid #000;">';
+      echo htmlspecialchars($pubkey);
+      echo '</pre><br/></p>';
+?>
+
+<form markdown="1" method="post">
+Remove Public Key:
+: <button type="submit" name="removeKey">Remove</button>
+
+  <blockquote class="inline_help">
+    <p>Clicking this button will delete the existing Public Key and let's you create a new one.</p>
+  </blockquote>
+</form>
+
+<?php
+    $pubkey = file_get_contents('/boot/config/plugins/unraid-replication/cert/reverse/client');
+    if (!empty($pubkey)) {
+?>
+
+<script>
+document.addEventListener('keydown', function(event) {
+  if (event.ctrlKey && event.altKey && event.key === 'e') {
+    const forms = ['infoMSG', 'replicationShutdown'];
+    forms.forEach(function(formId) {
+      const form = document.getElementById(formId);
+      if (form.style.display === 'none') {
+        form.style.display = 'block';
+      } else {
+        form.style.display = 'none';
+      }
+    });
+  }
+});
+</script>
+
+<form method="post" id="infoMSG">
+
+<hr/>
+<p/>
+
+<dl>
+<dt style="color: green;">Reverse Replication configured!</dt>
+<dd>Press CTRL+ALT+e to be able to start a Reverse Replication</dd>
+</dl>
+</form>
+
+<form method="post" style="display: none;" id="replicationShutdown">
+
+<hr/>
+<p/>
+
+<dl>
+<?php
+    if(file_exists($tmp_path . '/clientReplication')) {
+?>
+<dt><button type="submit" name="revReplication" disabled>Start</button></dt>
+<dd><text style="color: red">Reverse Repliation waiting...</text><i> (refresh page to update Status)</i></dd>
+<?php
+    } else {
+?>
+<dt><button type="submit" name="revReplication">Start</button></dt>
+<dd><p style="color: red;">Use with Caution! This will stop all containers which are configured for Replication on<br/>the Host and Client machine and start them after the replication again on the Host machine!</p></dd>
+<?php
+    }
+?>
+</dl>
+<br/>
+</form>
+
+<?php
+    }
+?>
+
+<hr/>
+
+<?php
+      if($replication_settings['KEEPALIVED'] === 'enabled') {
+?>
+
+<div style="display: flex; justify-content: center;">
+<form method="post">
+<?php
+        if($docker_cfg['DOCKER_ENABLED'] === 'yes') {
+?>
+Docker Autostart:&nbsp;&nbsp;
+  <select name="DOCKER_REPLICATION">
+    <?= mk_option($replication_settings['DOCKER_REPLICATION'], 'disabled', 'Disabled')?>
+    <?= mk_option($replication_settings['DOCKER_REPLICATION'], 'enabled', 'Enabled')?>
+    </select>
+<?php
+        } else {
+?>
+  <select name="DOCKER_REPLICATION" value="disabled" hidden>
+<?php
+        }
+        if($lxc_cfg['SERVICE'] === 'enabled') {
+?>
+LXC Autostart:&nbsp;&nbsp;
+  <select name="LXC_REPLICATION">
+    <?= mk_option($replication_settings['LXC_REPLICATION'], 'disabled', 'Disabled')?>
+    <?= mk_option($replication_settings['LXC_REPLICATION'], 'enabled', 'Enabled')?>
+  </select>
+<?php
+        } else {
+?>
+  <select name="LXC_REPLICATION" value="disabled" hidden>
+<?php
+        }
+        if($domain_cfg['SERVICE'] === 'enable') {
+?>
+VM Autostart:&nbsp;&nbsp;
+  <select name="VM_REPLICATION" title="Not implemented yet" disabled>
+    <?= mk_option($replication_settings['VM_REPLICATION'], 'disabled', 'Disabled')?>
+    <?= mk_option($replication_settings['VM_REPLICATION'], 'enabled', 'Enabled')?>
+  </select>
+<?php
+        } else {
+?>
+  <select name="VM_REPLICATION" value="disabled" hidden>
+<?php
+        }
+?>
+<input type="submit" name="replicateServices" value="Update">
+</form>
+</div>
+
+<hr/>
+
+<?php
+      }
+?>
+
+<p/>
+<form markdown="1" method="post">
+Enable keepalived:
+: <select name="KEEPALIVED">
+  <?= mk_option($replication_settings['KEEPALIVED'], 'disabled', 'Disabled')?>
+  <?= mk_option($replication_settings['KEEPALIVED'], 'enabled', 'Enabled')?>
+  </select>
+
+  <blockquote class="inline_help">
+    <p>Choose whether to use keepalived or not.<br/>Keepalived allows to you create a failover(ish) setup where the Client (Backup) side will take over when the Host is not available.<br/><b>Note:</b> When enabling keepalived for the first time don't forget to update your config. Keepalived will start after you update the config in the keepalived tab.<br/><b>ATTENTION:</b> This will currently not replicate the data back to the Master Server when the Backup Server is the primary host and the Master Server comes back online! Currently it will just shut down the containers on the Backup Server.</p>
+  </blockquote>
+
+Temporary Path:
+: <input style="width: 200px;"type="text" name="tempPath" value="<?php echo $replication_settings['TEMP_PATH']; ?>" placeholder="/tmp/unraid-replication" >
+
+  <blockquote class="inline_help">
+    <p>Set the temporary path for the replication plugin.<br/>When empty the default path '/tmp/unraid-replication' will be used (in most cases the default path is sufficient, if you are low on RAM read on).<br/><b>ATTENTION:</b> If you use the default path make sure that enough RAM is available, the Docker Replication (if enabled) will copy the container layers to this path from the host (one by one), most conatiners should not consume more than 1GB of RAM but please always check for exceptions if you are running low on RAM and consider choosing a path on your Cache pool or Array.</p>
+  </blockquote>
+
+<dl>
+<dt>&nbsp;<dt/>
+<dd><input type="submit" name="updateClientSettings" value="Update">
+    <a class="button" style="width: 150px;" href="/Settings">Done</a>
+</dd>
+</dl>
+</form>
+
+<?php
+    } else {
+?>
+
+<form markdown="1" method="post">
+Public Key from Host (Master):
+: <input style="width: 200px;" type="text" name="clientPubKey" placeholder="ssh-rsa PUBLICKEYFROMMASTER" required>
+  <button type="submit" name="clientPublicKey">Update</button>
+
+  <blockquote class="inline_help">
+    <p>Paste the Public Key from the Host (Master) machine here and press the Update button.</p>
+  </blockquote>
+</form>
+
+<?php
+      echo '<p style="text-align: center;">Public Key:';
+      echo '<pre style="width: 600px; margin: 0 auto; padding: 10px; border: 1px solid #000;">';
+      echo 'No Public Key found, please paste the Public Key from the host and click Update!';
+      echo '</pre><br/></p>';
+    }
+  } else {
+    $pubkey = '/boot/config/plugins/unraid-replication/cert/replication.pub';
+    if (file_exists('/boot/config/plugins/unraid-replication/cert/replication')) {
+?>
+
+<form markdown="1" method="post">
+Change Host IP:
+: <input type="text" name="Host" value="<?php echo !empty($replication_settings['HOST']) ? $replication_settings['HOST'] : ''; ?>" required>
+  <button type="submit" name="changeHost">Change</button>
+  <input type="button" value="Test" onclick="openBox('/usr/local/emhttp/plugins/unraid-replication/scripts/check_ssh_connection&arg1=<?php echo $replication_settings['HOST']; ?>','Check SSH Connection',600,800,true)">
+<?php
+      if ($replication_settings['CONNECTION_TEST'] !== 'success') {
+        echo '<text style="color: red;">Connection not tested or connection failed!</text>';
+      }
+?>
+
+</form>
+
+<?php
+      echo '<p style="text-align: center;">Public Key:';
+      echo '<pre style="width: 600px; margin: 0 auto; padding: 10px; border: 1px solid #000;">';
+      $contents = preg_replace('/\s(\S+)$/', ' uR_replication@' . $vars['NAME'], file_get_contents($pubkey));
+      echo htmlspecialchars($contents);
+      echo '</pre>';
+      echo '<br/></p>';
+?>
+
+<form markdown="1" method="post">
+Remove Key Pair:
+: <button type="submit" name="removeKey">Remove</button>
+
+  <blockquote class="inline_help">
+    <p>Clicking this button let you create a new Key Pair.<br/><b>NOTE:</b> Please don't forget to update the Public Key on the Client too!</p>
+  </blockquote>
+</form>
+
+<script>
+document.addEventListener('keydown', function(event) {
+  if (event.ctrlKey && event.altKey && event.key === 'e') {
+    const forms = ['certs', 'replicationShutdown'];
+    forms.forEach(function(formId) {
+      const form = document.getElementById(formId);
+      if (form.style.display === 'none') {
+        form.style.display = 'block';
+      } else {
+        form.style.display = 'none';
+      }
+    });
+  }
+});
+</script>
+
+<?php
+      $rev_key = file_get_contents('/boot/config/plugins/unraid-replication/cert/reverse/client');
+      if (!empty($rev_key)) {
+?>
+
+<form markdown="1" method="post" id="certs">
+
+<hr/>
+<p/>
+
+Remove Reverse Key Pair:
+: <button type="submit" name="removeKeyReverse">Remove</button>
+
+  <blockquote class="inline_help">
+    <p>Remove the Key Pair that you've created on the Client.<br/><b>Note:</b> Press CTRL+ALT+e on your keyboard to show the Shutdown menu.</p>
+  </blockquote>
+</form>
+
+<form method="post" style="display: none;" id="replicationShutdown">
+
+<hr/>
+<p/>
+
+<dl>
+<dt><button type="submit" name="replicationREBOOT">Reboot</button><button type="submit" name="replicationSHUTDOWN">Shutdown</button></dt>
+<dd><p>This initiates a Replication and will Reboot or Shutdown this system afterwards and replicates the data back<br/>when the Master machine becomes online again.</p></dd>
+</dl>
+<br/>
+</form>
+
+<?php
+      } else {
+?>
+
+<form markdown="1" method="post" style="display: none;" id="certs">
+
+<hr/>
+<p/>
+
+Generate Key Pair for Reverse Replication:
+: <input style="width: 200px;" type="text" name="Master" value="<?php echo !empty($network['IPADDR:0']) ? $network['IPADDR:0'] : ''; ?>" placeholder="IP/Hostname from this Server" required>
+  <button type="submit" name="generateKeyPairReverse">Generate</button>
+  <blockquote class="inline_help">
+    <p>TBD</p>
+  </blockquote>
+</form>
+
+<?php
+      }
+?>
+
+<hr/>
+<p/>
+
+<form markdown="1" method="post">
+Start Replication:
+<?php
+      if(shell_exec('pgrep -f "/usr/local/emhttp/plugins/unraid-replication/scripts/host_sync"')) {
+?>
+: <input type="submit" name="startReplication" value="Start" disabled><text style="color: red">RUNNING</text><i> (refresh page to update Status)</i>
+<?php
+      } elseif(file_exists($tmp_path . '/clientReplication')) {
+?>
+: <input type="submit" name="startReplication" value="Start" disabled><text style="color: red">Reverse Replication RUNNING</text><i> (refresh page to update Status)</i>
+<?php
+      } else {
+?>
+: <input type="submit" name="startReplication" value="Start">
+<?php
+      }
+?>
+</form>
+
+<hr/>
+<p/>
+
+<div style="display: flex; justify-content: center;">
+<form method="post">
+<?php
+      if($docker_cfg['DOCKER_ENABLED'] === 'yes') {
+?>
+Docker Replication:&nbsp;&nbsp;
+  <select name="DOCKER_REPLICATION">
+    <?= mk_option($replication_settings['DOCKER_REPLICATION'], 'disabled', 'Disabled')?>
+    <?= mk_option($replication_settings['DOCKER_REPLICATION'], 'enabled', 'Enabled')?>
+    </select>
+<?php
+      }
+      if($lxc_cfg['SERVICE'] === 'enabled') {
+?>
+LXC Replication:&nbsp;&nbsp;
+  <select name="LXC_REPLICATION">
+    <?= mk_option($replication_settings['LXC_REPLICATION'], 'disabled', 'Disabled')?>
+    <?= mk_option($replication_settings['LXC_REPLICATION'], 'enabled', 'Enabled')?>
+  </select>
+<?php
+      }
+      if($domain_cfg['SERVICE'] === 'enable') {
+?>
+VM Replication:&nbsp;&nbsp;
+  <select name="VM_REPLICATION" title="Not implemented yet" disabled>
+    <?= mk_option($replication_settings['VM_REPLICATION'], 'disabled', 'Disabled')?>
+    <?= mk_option($replication_settings['VM_REPLICATION'], 'enabled', 'Enabled')?>
+  </select>
+
+<?php
+      }
+?>
+</div>
+
+<p/>
+
+Enable keepalived:
+: <select name="KEEPALIVED">
+  <?= mk_option($replication_settings['KEEPALIVED'], 'disabled', 'Disabled')?>
+  <?= mk_option($replication_settings['KEEPALIVED'], 'enabled', 'Enabled')?>
+  </select>
+
+
+  <blockquote class="inline_help">
+    <p>Choose whether to use keepalived or not.<br/>Keepalived allows to you create a failover(ish) setup where the Client (Backup) side will take over when the Host is not available.<br/><b>Note:</b> When enabling keepalived for the first time don't forget to update your config. Keepalived will start after you update the config in the keepalived tab.<br/><b>ATTENTION:</b> This will currently not replicate the data back to the Master Server when the Backup Server is the primary host and the Master Server comes back online! Currently it will just shut down the containers on the Backup Server.</p>
+  </blockquote>
+
+Temporary Path:
+: <input style="width: 200px;"type="text" name="tempPath" value="<?php echo $replication_settings['TEMP_PATH']; ?>" placeholder="/tmp/unraid-replication" >
+
+
+  <blockquote class="inline_help">
+    <p>Set the temporary path for the replication plugin.<br/>When empty the default path '/tmp/unraid-replication' will be used (in most cases the default path is sufficient, if you are low on RAM read on).<br/><b>ATTENTION:</b> If you use the default path make sure that enough RAM is available, the Docker Replication (if enabled) will copy the container layers to this path from the host (one by one), most conatiners should not consume more than 1GB of RAM but please always check for exceptions if you are running low on RAM and consider choosing a path on your Cache pool or Array.</p>
+  </blockquote>
+
+Logging:
+: <select name="SYSLOG_LOGGING">
+  <?= mk_option($replication_settings['SYSLOG_LOGGING'], '0', 'File')?>
+  <?= mk_option($replication_settings['SYSLOG_LOGGING'], '1', 'Syslog')?>
+  </select>
+
+
+  <blockquote class="inline_help">
+    <p>File: Log will be written to '/var/log/unraid-replication'<br/>Syslog: Log will be written to the default Unraid syslog</p>
+  </blockquote>
+
+<dl>
+<dt>&nbsp;<dt/>
+<dd>
+  <input type="submit" name="replicationSettings" value="Update">
+  <a class="button" style="width: 150px;" href="/Settings">Done</a>
+</dd>
+</dl>
+</form>
+
+<?php
+    } else {
+?>
+
+<form markdown="1" method="post">
+Generate Key Pair for Client IP/Hostname:
+: <input style="width: 200px;" type="text" name="Host" value="<?php echo !empty($replication_settings['HOST']) ? $replication_settings['HOST'] : ''; ?>" placeholder="IP/Hostname" required>
+  <button type="submit" name="generateKeyPair">Generate</button>
+
+  <blockquote class="inline_help">
+    <p>Create a Key Pair to be able to initiate the replication<br/><b>Note:</b> After creating a Key Pair copy over the Public Key, displayed below, to the client (simply double click the key and copy/paste it to the client).<br/><b>Port:</b> If you need to specify a port you can do that too like: <i>IPADDRESS:PORT</i> or <i>HOSTNAME:PORT</i></p>
+  </blockquote>
+</form>
+
+<?php
+      echo '<p style="text-align: center;">Public Key:';
+      echo '<pre style="width: 600px; margin: 0 auto; padding: 10px; border: 1px solid #000;">';
+      echo 'No Key Pair found, please click "Generate" to generate a Key Pair!';
+      echo '</pre><br/></p>';
+    }
+  }
+}
+?>
+
+<?php
+if(isset($_POST['updateInstanceType'])) {
+  $replication_settings['INSTANCE_TYPE'] = $_POST['INSTANCE_TYPE'];
+  $newSettings = '';
+  foreach ($replication_settings as $key => $value) {
+    $newSettings .= "$key=$value\n";
+  }
+  file_put_contents('/boot/config/plugins/unraid-replication/settings.cfg', $newSettings);
+  shell_exec('/usr/local/emhttp/plugins/unraid-replication/scripts/remove_ssh_certs');
+  echo '<script>parent.window.location.reload();</script>';
+}
+
+if(isset($_POST['updateClientSettings'])) {
+  $replication_settings['KEEPALIVED'] = $_POST['KEEPALIVED'];
+  $replication_settings['TEMP_PATH'] = $_POST['tempPath'];
+  if($replication_settings['KEEPALIVED'] == 'disabled') {
+    $replication_settings['DOCKER_REPLICATION'] = 'disabled';
+    $replication_settings['LXC_REPLICATION'] = 'disabled';
+    $replication_settings['VM_REPLICATION'] = 'disabled';
+    if(shell_exec('pidof keepalived')) {
+      shell_exec('kill $(pidof keepalived) && tail --pid=$(pidof keepalived) -f 2>/dev/null');
+    }
+  }
+  $newSettings = '';
+  foreach ($replication_settings as $key => $value) {
+    $newSettings .= "$key=$value\n";
+  }
+  file_put_contents('/boot/config/plugins/unraid-replication/settings.cfg', $newSettings);
+  echo '<script>parent.window.location.reload();</script>';
+}
+
+if(isset($_POST['replicateServices'])) {
+  $replication_settings['DOCKER_REPLICATION'] = $_POST['DOCKER_REPLICATION'];
+  $replication_settings['LXC_REPLICATION'] = $_POST['LXC_REPLICATION'];
+  $replication_settings['VM_REPLICATION'] = $_POST['VM_REPLICATION'];
+  $newSettings = '';
+  foreach ($replication_settings as $key => $value) {
+    $newSettings .= "$key=$value\n";
+  }
+  file_put_contents('/boot/config/plugins/unraid-replication/settings.cfg', $newSettings);
+  echo '<script>parent.window.location.reload();</script>';
+}
+
+if(isset($_POST['transferType'])) {
+  $replication_settings['TRANSFER_TYPE'] = $_POST['TRANSFER_TYPE'];
+  $newSettings = '';
+  foreach ($replication_settings as $key => $value) {
+    $newSettings .= "$key=$value\n";
+  }
+  file_put_contents('/boot/config/plugins/unraid-replication/settings.cfg', $newSettings);
+  echo '<script>parent.window.location.reload();</script>';
+}
+
+if(isset($_POST['changeHost'])) {
+  $replication_settings['HOST'] = $_POST['Host'];
+  $replication_settings['CONNECTION_TEST'] = '';
+  $newSettings = '';
+  foreach ($replication_settings as $key => $value) {
+    $newSettings .= "$key=$value\n";
+  }
+  file_put_contents('/boot/config/plugins/unraid-replication/settings.cfg', $newSettings);
+  echo '<script>parent.window.location.reload();</script>';
+}
+
+if(isset($_POST['generateKeyPair'])) {
+  $replication_settings['HOST'] = $_POST['Host'];
+  $newSettings = '';
+  foreach ($replication_settings as $key => $value) {
+    $newSettings .= "$key=$value\n";
+  }
+  file_put_contents('/boot/config/plugins/unraid-replication/settings.cfg', $newSettings);
+  shell_exec('/usr/local/emhttp/plugins/unraid-replication/scripts/generate_ssh_certs');
+  echo '<script>parent.window.location.reload();</script>';
+}
+
+if(isset($_POST['generateKeyPairReverse'])) {
+  $master_IP = $_POST['Master'];
+  shell_exec('/usr/local/emhttp/plugins/unraid-replication/scripts/reverse_replication_keys ' . $master_IP);
+  echo '<script>parent.window.location.reload();</script>';
+}
+
+if(isset($_POST['removeKey'])) {
+  $replication_settings['HOST'] = '';
+  $newSettings = '';
+  foreach ($replication_settings as $key => $value) {
+    $newSettings .= "$key=$value\n";
+  }
+  file_put_contents('/boot/config/plugins/unraid-replication/settings.cfg', $newSettings);
+  shell_exec('rm -f /boot/config/plugins/unraid-replication/cert/*');
+  echo '<script>parent.window.location.reload();</script>';
+}
+
+if(isset($_POST['removeKeyReverse'])) {
+  shell_exec('/usr/local/emhttp/plugins/unraid-replication/scripts/reverse_remove_ssh_certs');
+  echo '<script>parent.window.location.reload();</script>';
+}
+
+if(isset($_POST['replicationSettings'])) {
+  $replication_settings['DOCKER_REPLICATION'] = $_POST['DOCKER_REPLICATION'];
+  $replication_settings['LXC_REPLICATION'] = $_POST['LXC_REPLICATION'];
+  $replication_settings['VM_REPLICATION'] = $_POST['VM_REPLICATION'];
+  $replication_settings['KEEPALIVED'] = $_POST['KEEPALIVED'];
+  $replication_settings['TEMP_PATH'] = $_POST['tempPath'];
+  $replication_settings['SYSLOG_LOGGING'] = $_POST['SYSLOG_LOGGING'];
+  $newSettings = '';
+  foreach ($replication_settings as $key => $value) {
+    $newSettings .= "$key=$value\n";
+  }
+  if($replication_settings['KEEPALIVED'] == 'disabled') {
+    if(shell_exec('pidof keepalived')) {
+      shell_exec('kill $(pidof keepalived) && tail --pid=$(pidof keepalived) -f 2>/dev/null');
+    }
+  }
+  file_put_contents('/boot/config/plugins/unraid-replication/settings.cfg', $newSettings);
+  echo '<script>parent.window.location.reload();</script>';
+}
+
+if (isset($_POST['clientPublicKey'])) {
+  if (!empty($_POST['clientPubKey'])) {
+    $publicKey = $_POST['clientPubKey'];
+    $filename = '/boot/config/plugins/unraid-replication/cert/replication.pub';
+    file_put_contents($filename, $publicKey);
+    shell_exec('/usr/local/emhttp/plugins/unraid-replication/scripts/inject_public_key');
+  }
+  echo '<script>parent.window.location.reload();</script>';
+}
+
+if (isset($_POST['startReplication'])) {
+  shell_exec('echo "/usr/local/emhttp/plugins/unraid-replication/scripts/host_sync" | at now -M');
+  echo '<script>parent.window.location.reload();</script>';
+}
+
+if (isset($_POST['revReplication'])) {
+  shell_exec('echo "/usr/local/emhttp/plugins/unraid-replication/scripts/reverse_replication" | at now -M');
+  echo '<script>parent.window.location.reload();</script>';
+}
+
+if (isset($_POST['replicationREBOOT'])) {
+  if (!file_exists($tmp_path)) {
+    mkdir($tmp_path, 0777, true);
+  }
+  shell_exec('echo "reboot" > ' . $tmp_path . '/reverseReplication');
+  shell_exec('echo "/usr/local/emhttp/plugins/unraid-replication/scripts/host_sync" | at now -M');
+  echo '<script>parent.window.location.reload();</script>';
+}
+
+if (isset($_POST['replicationSHUTDOWN'])) {
+  if (!file_exists($tmp_path)) {
+    mkdir($tmp_path, 0777, true);
+  }
+  shell_exec('echo "shutdown" > ' . $tmp_path . '/reverseReplication');
+  shell_exec('echo "/usr/local/emhttp/plugins/unraid-replication/scripts/host_sync" | at now -M');
+  echo '<script>parent.window.location.reload();</script>';
+}
+?>
