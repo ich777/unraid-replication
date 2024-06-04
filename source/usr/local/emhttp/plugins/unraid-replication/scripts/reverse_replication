@@ -123,10 +123,6 @@ if [ "${DOCKER_REPLICATION}" == "enabled" ]; then
     # Get containers and replicate them one by one
     DOCKER_REPLICATION_JSON="$(cat /boot/config/plugins/unraid-replication/replication_cfg/docker.json | jq -r '.[]')"
     CONTAINERS="$(echo "$DOCKER_REPLICATION_JSON" | jq -r '.NAME')"
-    if [[ -z "${CONTAINERS}" || "${CONTAINERS}" == "null" ]]; then
-      echo "Error: No Docker containers to replicate specified"
-      return
-    fi
     IFS=$'\n'
     for container in $CONTAINERS; do
       if ! docker inspect ${container} >/dev/null 2>&1 ; then
@@ -217,10 +213,6 @@ if [ "${LXC_REPLICATION}"  == "enabled" ]; then
     # Get containers and replicate them one by one
     LXC_REPLICATION_JSON="$(cat /boot/config/plugins/unraid-replication/replication_cfg/lxc.json | jq -r '.[]')"
     CONTAINERS="$(cat /boot/config/plugins/unraid-replication/replication_cfg/lxc.json | jq -r '.[].NAME')"
-    if [[ -z "${CONTAINERS}" || "${CONTAINERS}" == "null" ]]; then
-      echo "Error: No Docker containers to replicate specified"
-      return
-    fi
     IFS=$'\n'
     for container in $CONTAINERS; do
       if ! lxc-info ${container} >/dev/null 2>&1 ; then
