@@ -2,8 +2,8 @@
 <!DOCTYPE PLUGIN [
   <!ENTITY name            "unraid-replication">
   <!ENTITY author          "ich777">
-  <!ENTITY version         "2024.06.04">
-  <!ENTITY md5             "a5b923c2f2d20875383ea7b0ba7a92c4">
+  <!ENTITY version         "2024.06.04a">
+  <!ENTITY md5             "3adfe107b33df128fc16544a5beac482">
   <!ENTITY keepalived_v    "2.3.1">
   <!ENTITY keepalived_md5  "58880213ff2ff9021660a6a3022c66d2">
   <!ENTITY launch          "Settings/unraid-replication">
@@ -17,6 +17,10 @@
 <PLUGIN  name="&name;" author="&author;" version="&version;" launch="&launch;" pluginURL="&pluginURL;" min="6.13.0-beta.2" support="https://forums.unraid.net/topic/167503-plugin-unraid-replication/" icon="clone">
 
 <CHANGES>
+
+###2024.06.04a
+- Minor bugfixes for keepalived scripts to prevent warning messages in syslog
+- Bugfix to replication logic when no containers are specified for a service 
 
 ###2024.06.04
 - Initial (experimental) release
