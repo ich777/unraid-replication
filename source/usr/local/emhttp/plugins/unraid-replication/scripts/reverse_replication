@@ -168,6 +168,17 @@ if [ "${DOCKER_REPLICATION}" == "enabled" ]; then
       # (if base path is not found skip and display message)
       container_paths="$(cat /boot/config/plugins/unraid-replication/replication_cfg/docker.json | jq -r --arg name "${container}" '.[] | select(.NAME == $name) | .PATHS[]')"
       for path in $container_paths; do
+        # Skip / or /mnt or any path that is not a subpath in /mnt
+        if [ "$path" == "/" ]; then
+          echo "Info: Not syncing path: /, skipping..."
+          continue
+        elif [ "$(echo "$path" | sed 's:/*$::')" == "/mnt" ]; then
+          echo "Info: Not syncinc path: /mnt, skipping..."
+          continue
+        elif [[ ! "$(echo "$path" | sed 's:/*$::')" =~ ^/mnt/.+ ]]; then
+          echo "Info: Not syncinc path: $(echo "$path" | sed 's:/*$::'), skipping..."
+          continue
+        fi
         ssh ${SSH_PORT} -i ${SSH_CERT} root@${HOST} "test -e $(echo "${path}" | cut -d '/' -f-4)" > /dev/null 2>&1
         if [ $? -ne 0 ]; then
           echo "Info: Path: $(echo "${path}" | cut -d '/' -f-4) on remote host not found, skipping..."
