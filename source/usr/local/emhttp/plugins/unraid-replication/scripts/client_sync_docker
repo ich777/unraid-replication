@@ -52,6 +52,9 @@ else
   docker_create="docker create \\
     --name='$CONTAINER'"
 
+  # Set for loops to only split on new lines
+  IFS=$'\n'
+
   if [[ ! -z ${NET} && ${NET} != "null" ]]; then
     for net in $NET; do
       docker_create+=" \\
