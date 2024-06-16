@@ -24,21 +24,21 @@ else
   fi
   CONTAINER_CONFIG="$(cat /boot/config/plugins/unraid-replication/replication_cfg/docker.json | jq -r --arg name "${CONTAINER}" '.[] | select(.NAME == $name)')"
   CONTAINER_JSON="$(cat ${TMP_PATH}/docker/${CONTAINER}.json)"
-  REPOSITORY="$(echo "${CONTAINER_CONFIG}" | jq -r '.REPOSITORY' 2>/dev/null)"
-  NET="$(echo "${CONTAINER_CONFIG}" | jq -r '.NETWORK' 2>/dev/null)"
+  REPOSITORY="$(echo "${CONTAINER_CONFIG}" | jq -r '.REPOSITORY' 2>/dev/null | sed "s/'/'\"'\"'/g")"
+  NET="$(echo "${CONTAINER_CONFIG}" | jq -r '.NETWORK' 2>/dev/null | sed "s/'/'\"'\"'/g")"
   if ! grep -q "^container:" <<<${NET} ; then
-    NET="$(echo "$CONTAINER_JSON" | jq -r '.[].HostConfig.NetworkMode' 2>/dev/null)"
+    NET="$(echo "$CONTAINER_JSON" | jq -r '.[].HostConfig.NetworkMode' 2>/dev/null | sed "s/'/'\"'\"'/g")"
   fi
-  IPS="$(echo "$CONTAINER_JSON" | jq -r --arg net "${NET}" '.[].NetworkSettings.Networks[$net].IPAMConfig.IPv4Address' 2>/dev/null)"
+  IPS="$(echo "$CONTAINER_JSON" | jq -r --arg net "${NET}" '.[].NetworkSettings.Networks[$net].IPAMConfig.IPv4Address' 2>/dev/null | sed "s/'/'\"'\"'/g")"
   BINDS="$(echo "$CONTAINER_JSON" | jq -r ".[$container].HostConfig.Binds[] | split(\":\") | \"'\(.[0])':'\(.[1])':'\(.[2])'\"" 2>/dev/null)"
-  RESTART="$(echo "$CONTAINER_JSON" | jq -r '.[].HostConfig.RestartPolicy.Name' 2>/dev/null)"
-  ENV_VARS="$(echo "$CONTAINER_JSON" | jq -r '.[].Config.Env[]' 2>/dev/null)"
+  RESTART="$(echo "$CONTAINER_JSON" | jq -r '.[].HostConfig.RestartPolicy.Name' 2>/dev/null | sed "s/'/'\"'\"'/g")"
+  ENV_VARS="$(echo "$CONTAINER_JSON" | jq -r '.[].Config.Env[]' 2>/dev/null | sed "s/'/'\"'\"'/g")"
   DEVICES="$(echo "$CONTAINER_JSON" | jq -r ".[].HostConfig.Devices | .[] | \"'\(.PathOnHost)':'\(.PathInContainer)'\"" 2>/dev/null)"
-  LABELS="$(echo "$CONTAINER_JSON" | jq -r '.[].Config.Labels | to_entries | .[] | "\(.key)=\(.value)"' 2>/dev/null)"
-  PORTS="$(echo "$CONTAINER_JSON" | jq -r '.[].HostConfig.PortBindings | to_entries[] | "\(.value[0].HostPort):\(.key)"' 2>/dev/null)"
-  CAPS="$(echo "$CONTAINER_JSON" | jq -r '.[].HostConfig.CapAdd[]' 2>/dev/null)"
-  DNS="$(echo "$CONTAINER_JSON" | jq -r '.[].HostConfig.Dns[]' 2>/dev/null)"
-  SYSCTLS="$(echo "$CONTAINER_JSON" | jq -r '.[].HostConfig.Sysctls | to_entries[] | "\(.key)=\(.value)"' 2>/dev/null)"
+  LABELS="$(echo "$CONTAINER_JSON" | jq -r '.[].Config.Labels | to_entries | .[] | "\(.key)=\(.value)"' 2>/dev/null | sed "s/'/'\"'\"'/g")"
+  PORTS="$(echo "$CONTAINER_JSON" | jq -r '.[].HostConfig.PortBindings | to_entries[] | "\(.value[0].HostPort):\(.key)"' 2>/dev/null | sed "s/'/'\"'\"'/g")"
+  CAPS="$(echo "$CONTAINER_JSON" | jq -r '.[].HostConfig.CapAdd[]' 2>/dev/null | sed "s/'/'\"'\"'/g")"
+  DNS="$(echo "$CONTAINER_JSON" | jq -r '.[].HostConfig.Dns[]' 2>/dev/null | sed "s/'/'\"'\"'/g")"
+  SYSCTLS="$(echo "$CONTAINER_JSON" | jq -r '.[].HostConfig.Sysctls | to_entries[] | "\(.key)=\(.value)"' 2>/dev/null | sed "s/'/'\"'\"'/g")"
 
   # Remove container, import layers, retag image and remove replication image
   echo "Info: Remote host replication task for Docker container: ${CONTAINER} starting"
