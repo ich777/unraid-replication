@@ -2,8 +2,8 @@
 <!DOCTYPE PLUGIN [
   <!ENTITY name            "unraid-replication">
   <!ENTITY author          "ich777">
-  <!ENTITY version         "2024.06.15a">
-  <!ENTITY md5             "1bd5c7c1c88ba3147ddb35541e056545">
+  <!ENTITY version         "2024.06.16">
+  <!ENTITY md5             "8b6a8759b675bab4598484a108801aa2">
   <!ENTITY keepalived_v    "2.3.1">
   <!ENTITY keepalived_md5  "58880213ff2ff9021660a6a3022c66d2">
   <!ENTITY launch          "Settings/unraid-replication">
@@ -17,6 +17,9 @@
 <PLUGIN  name="&name;" author="&author;" version="&version;" launch="&launch;" pluginURL="&pluginURL;" min="6.13.0-beta.2" support="https://forums.unraid.net/topic/167503-plugin-unraid-replication/" icon="clone">
 
 <CHANGES>
+
+###2024.06.16
+- Escape single quotation marks in Docker replication routine
 
 ###2024.06.15a
 - Fix bug that prevented containers with lables with space not replicating correctly
