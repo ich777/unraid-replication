@@ -2,8 +2,8 @@
 <!DOCTYPE PLUGIN [
   <!ENTITY name            "unraid-replication">
   <!ENTITY author          "ich777">
-  <!ENTITY version         "2024.06.17">
-  <!ENTITY md5             "9d8e52b8d31e45ddcb6df990e6ab17d0">
+  <!ENTITY version         "2024.06.18">
+  <!ENTITY md5             "0872306498333512bd2afa84ed14d27d">
   <!ENTITY keepalived_v    "2.3.1">
   <!ENTITY keepalived_md5  "58880213ff2ff9021660a6a3022c66d2">
   <!ENTITY launch          "Settings/unraid-replication">
@@ -17,6 +17,10 @@
 <PLUGIN  name="&name;" author="&author;" version="&version;" launch="&launch;" pluginURL="&pluginURL;" min="6.13.0-beta.2" support="https://forums.unraid.net/topic/167503-plugin-unraid-replication/" icon="clone">
 
 <CHANGES>
+
+###2024.06.18
+- Fix visual bug on client side if a service type is not enabled
+- Clarified description from virtual_router_id in keepalived examples
 
 ###2024.06.17
 - Fix typo in keepalived example configurations
