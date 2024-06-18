@@ -135,10 +135,6 @@ Docker Autostart:&nbsp;&nbsp;
     <?= mk_option($replication_settings['DOCKER_REPLICATION'], 'enabled', 'Enabled')?>
     </select>
 <?php
-        } else {
-?>
-  <select name="DOCKER_REPLICATION" value="disabled" hidden>
-<?php
         }
         if($lxc_cfg['SERVICE'] === 'enabled') {
 ?>
@@ -148,10 +144,6 @@ LXC Autostart:&nbsp;&nbsp;
     <?= mk_option($replication_settings['LXC_REPLICATION'], 'enabled', 'Enabled')?>
   </select>
 <?php
-        } else {
-?>
-  <select name="LXC_REPLICATION" value="disabled" hidden>
-<?php
         }
         if($domain_cfg['SERVICE'] === 'enable') {
 ?>
@@ -160,10 +152,6 @@ VM Autostart:&nbsp;&nbsp;
     <?= mk_option($replication_settings['VM_REPLICATION'], 'disabled', 'Disabled')?>
     <?= mk_option($replication_settings['VM_REPLICATION'], 'enabled', 'Enabled')?>
   </select>
-<?php
-        } else {
-?>
-  <select name="VM_REPLICATION" value="disabled" hidden>
 <?php
         }
 ?>
